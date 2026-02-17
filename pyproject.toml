@@ -1,0 +1,13 @@
+[tool.poetry]
+name = "babu"
+version = "0.0.5"
+description = "Experimental parenting tools"
+authors = ["Enys Mones <enys.mones@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.13"
+owlet-api = "^0.1.0"
+pyowletapi = "^2025.4.10"
+requests = "^2.32.5"
+spotipy = "^2.25.2"
