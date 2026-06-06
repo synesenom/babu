@@ -725,5 +725,5 @@ rmdir lib/
 | 11 | `src/screens/SetupScreen.tsx` | Credential form + OAuth | |
 | 12 | `src/screens/MonitoringScreen.tsx` | Live vitals + controls | |
 | 13 | `src/screens/DoneScreen.tsx` | Completion + stack reset | |
-| 14 | `e2e/*.yaml` | ~~Maestro E2E flows~~ (skipped) | ✅ |
+| 14 | `e2e/*.yaml` | Maestro E2E flows | |
 | 15 | Delete Python + Node.js files | Repo cleanup | |
