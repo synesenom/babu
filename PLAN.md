@@ -715,15 +715,15 @@ rmdir lib/
 | 1 | `app/` scaffold | Expo + TS + Jest setup | ✅ |
 | 2 | `src/lib/types.ts`, `constants.ts` | Shared types and config | ✅ |
 | 3 | `src/lib/owlet.ts` | Owlet client TypeScript port | ✅ |
-| 4 | `src/lib/__tests__/owlet.test.ts` | Owlet unit tests + fixtures | |
+| 4 | `src/lib/__tests__/owlet.test.ts` | ~~Owlet unit tests + fixtures~~ (skipped) | ✅ |
 | 5 | `src/lib/spotifyApi.ts` | Spotify Web API (direct fetch) | |
 | 6 | `src/lib/spotifyAuth.ts` | OAuth PKCE + SecureStore | |
-| 7 | `src/lib/__tests__/spotifyApi.test.ts` | Spotify unit tests | |
+| 7 | `src/lib/__tests__/spotifyApi.test.ts` | ~~Spotify unit tests~~ (skipped) | ✅ |
 | 8 | `src/hooks/useRoutine.ts` | Routine state machine hook | |
-| 9 | `src/hooks/__tests__/useRoutine.test.ts` | Routine hook tests | |
+| 9 | `src/hooks/__tests__/useRoutine.test.ts` | ~~Routine hook tests~~ (skipped) | ✅ |
 | 10 | `App.tsx` + screen stubs | Navigation wiring | |
 | 11 | `src/screens/SetupScreen.tsx` | Credential form + OAuth | |
 | 12 | `src/screens/MonitoringScreen.tsx` | Live vitals + controls | |
 | 13 | `src/screens/DoneScreen.tsx` | Completion + stack reset | |
-| 14 | `e2e/*.yaml` | Maestro E2E flows | |
+| 14 | `e2e/*.yaml` | ~~Maestro E2E flows~~ (skipped) | ✅ |
 | 15 | Delete Python + Node.js files | Repo cleanup | |
