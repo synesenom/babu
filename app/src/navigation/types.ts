@@ -3,6 +3,6 @@ import type { SpotifyTokens } from '../lib/types';
 
 export type RootStackParamList = {
   Setup: undefined;
-  Monitoring: { owlet: Owlet; tokens: SpotifyTokens; deviceName: string; pollIntervalMs?: number };
+  Monitoring: { owlet: Owlet; tokens: SpotifyTokens; deviceName: string; pollIntervalMs?: number; monitorOnly?: boolean };
   Done: undefined;
 };

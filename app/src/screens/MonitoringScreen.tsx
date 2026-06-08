@@ -22,8 +22,8 @@ const STATUS_COLORS: Record<RoutineStatus, string> = {
 };
 
 export default function MonitoringScreen({ route, navigation }: Props) {
-  const { owlet, tokens, deviceName, pollIntervalMs } = route.params;
-  const { state, start, stop } = useRoutine(owlet, tokens, deviceName, pollIntervalMs);
+  const { owlet, tokens, deviceName, pollIntervalMs, monitorOnly } = route.params;
+  const { state, start, stop } = useRoutine(owlet, tokens, deviceName, pollIntervalMs, monitorOnly);
   const [errorDismissed, setErrorDismissed] = useState(false);
 
   useEffect(() => {
@@ -52,7 +52,7 @@ export default function MonitoringScreen({ route, navigation }: Props) {
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={[styles.statusPill, { backgroundColor: statusColor + '33', borderColor: statusColor }]}>
-          <Text style={[styles.statusText, { color: statusColor }]}>{status}</Text>
+          <Text testID="status-text" style={[styles.statusText, { color: statusColor }]}>{status}</Text>
         </View>
 
         <View style={styles.card}>
@@ -103,7 +103,7 @@ export default function MonitoringScreen({ route, navigation }: Props) {
           </TouchableOpacity>
         )}
 
-        <TouchableOpacity style={styles.stopButton} onPress={handleStop}>
+        <TouchableOpacity testID="stop-button" style={styles.stopButton} onPress={handleStop}>
           <Text style={styles.stopButtonText}>Stop</Text>
         </TouchableOpacity>
       </ScrollView>

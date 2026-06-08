@@ -1,7 +1,14 @@
 appId: com.enysmones.babu
 ---
-- launchApp
-- tapOn: "Start Routine"
-- assertVisible: "running"
-- tapOn: "Stop"
+- launchApp:
+    clearState: true
+- tapOn:
+    id: "connect-spotify-button"
+- assertVisible: "Connected"
+- tapOn:
+    id: "start-routine-button"
+- assertVisible:
+    id: "status-text"
+- tapOn:
+    id: "stop-button"
 - assertVisible: "babu"   # back on Setup

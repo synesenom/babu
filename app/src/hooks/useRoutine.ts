@@ -52,6 +52,7 @@ export function useRoutine(
   tokens: SpotifyTokens | null,
   deviceName: string,
   pollIntervalMs: number = POLL_INTERVAL_MS,
+  monitorOnly: boolean = false,
 ): {
   state: RoutineState;
   start: () => void;
@@ -77,33 +78,35 @@ export function useRoutine(
       const playback = await getCurrentPlayback(tokens.access_token);
       dispatch({ type: 'NOW_PLAYING', payload: playback });
 
-      if (reading.heart_rate !== null && reading.heart_rate < HR_THRESHOLD) {
-        clearPolling();
-        dispatch({ type: 'TRANSITIONING' });
+      if (!monitorOnly) {
+        if (reading.heart_rate !== null && reading.heart_rate < HR_THRESHOLD) {
+          clearPolling();
+          dispatch({ type: 'TRANSITIONING' });
 
-        const remainingSeconds = playback?.remaining_seconds ?? 0;
-        if (remainingSeconds > 0) {
-          await new Promise<void>((resolve) => setTimeout(resolve, remainingSeconds * 1000));
-        }
+          const remainingSeconds = playback?.remaining_seconds ?? 0;
+          if (remainingSeconds > 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, remainingSeconds * 1000));
+          }
 
-        const deviceId = await findDeviceByName(tokens.access_token, deviceName);
-        if (deviceId) {
-          await startPlaylist(tokens.access_token, WHITENOISE_PLAYLIST, deviceId);
-        }
-        dispatch({ type: 'DONE' });
-      } else {
-        const remainingSeconds = playback?.remaining_seconds ?? null;
-        if (remainingSeconds === null || remainingSeconds < RESTART_THRESHOLD_SECONDS) {
           const deviceId = await findDeviceByName(tokens.access_token, deviceName);
           if (deviceId) {
-            await startPlaylist(tokens.access_token, CHOPIN_PLAYLIST, deviceId);
+            await startPlaylist(tokens.access_token, WHITENOISE_PLAYLIST, deviceId);
+          }
+          dispatch({ type: 'DONE' });
+        } else {
+          const remainingSeconds = playback?.remaining_seconds ?? null;
+          if (remainingSeconds === null || remainingSeconds < RESTART_THRESHOLD_SECONDS) {
+            const deviceId = await findDeviceByName(tokens.access_token, deviceName);
+            if (deviceId) {
+              await startPlaylist(tokens.access_token, CHOPIN_PLAYLIST, deviceId);
+            }
           }
         }
       }
     } catch (err) {
       dispatch({ type: 'ERROR', payload: err instanceof Error ? err.message : String(err) });
     }
-  }, [owlet, tokens, deviceName, clearPolling]);
+  }, [owlet, tokens, deviceName, monitorOnly, clearPolling]);
 
   const start = useCallback(() => {
     dispatch({ type: 'START' });

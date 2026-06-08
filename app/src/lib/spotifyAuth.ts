@@ -7,7 +7,7 @@ import type { SpotifyTokens } from './types';
 
 const SECURE_KEY = 'babu_spotify_tokens';
 
-// Spotify Developer dashboard: add `babu://` and `exp://localhost:8081/--/` as redirect URIs
+// Spotify Developer dashboard: add `babu://auth` and `exp://localhost:8081/--/` as redirect URIs
 const DISCOVERY: AuthSession.DiscoveryDocument = {
   authorizationEndpoint: 'https://accounts.spotify.com/authorize',
   tokenEndpoint: 'https://accounts.spotify.com/api/token',
@@ -57,7 +57,7 @@ export function useSpotifyAuth(
   const [tokens, setTokens] = useState<SpotifyTokens | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const redirectUri = AuthSession.makeRedirectUri({ scheme: 'babu' });
+  const redirectUri = AuthSession.makeRedirectUri({ scheme: 'babu', path: 'auth' });
 
   const [request, response, nativePromptAsync] = AuthSession.useAuthRequest(
     {

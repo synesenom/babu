@@ -248,3 +248,48 @@ it('nowPlaying is updated from getCurrentPlayback() on each tick', async () => {
 
   expect(result.current.state.nowPlaying?.track_name).toBe('Nocturne Op. 15 No. 2');
 });
+
+// ---------------------------------------------------------------------------
+// 9. monitorOnly mode — no transition triggered
+// ---------------------------------------------------------------------------
+
+it('monitorOnly: HR below threshold keeps status running and never calls startPlaylist', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  mockGetCurrentPlayback.mockResolvedValue({ ...MOCK_PLAYBACK, remaining_seconds: 10, remaining_ms: 10000 });
+
+  const { result } = await renderHook(() =>
+    useRoutine(owlet, MOCK_TOKENS, 'iphone', POLL_INTERVAL_MS, true),
+  );
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+
+  expect(result.current.state.status).toBe('running');
+  expect(mockStartPlaylist).not.toHaveBeenCalled();
+});
+
+it('monitorOnly: vitals and nowPlaying are still updated each tick', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }, { heart_rate: 85 }]);
+  mockGetCurrentPlayback
+    .mockResolvedValueOnce(MOCK_PLAYBACK)
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, track_name: 'Nocturne Op. 15 No. 2' });
+
+  const { result } = await renderHook(() =>
+    useRoutine(owlet, MOCK_TOKENS, 'iphone', POLL_INTERVAL_MS, true),
+  );
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+  expect(result.current.state.lastReading?.heart_rate).toBe(90);
+  expect(result.current.state.nowPlaying?.track_name).toBe('Nocturne Op. 9 No. 2');
+
+  await advanceInterval();
+  expect(result.current.state.lastReading?.heart_rate).toBe(85);
+  expect(result.current.state.nowPlaying?.track_name).toBe('Nocturne Op. 15 No. 2');
+});

@@ -8,12 +8,11 @@ Automated bedtime routine that monitors a baby's heart rate via the **Owlet Smar
 
 ## How it works
 
-1. Spotify starts playing the **Chopin playlist** on your phone/device.
-2. Every 10 seconds the app polls the Owlet Smart Sock for the baby's current heart rate.
-3. When heart rate falls **below 110 BPM** (configurable), the app waits for the current track to finish and then transitions to the **white noise playlist**.
-4. The routine ends after the white noise starts playing.
-
-The Owlet auth chain goes: Firebase (email/password → idToken) → Owlet SSO mini-token → Ayla Networks access token → device property fetch. Both implementations handle the full chain automatically, including token refresh.
+1. Enter your Owlet and Spotify credentials in the app and tap **Connect Spotify**.
+2. Tap **Start Routine** — Spotify starts playing the **Chopin playlist** on your target device.
+3. Every 10 seconds the app polls the Owlet Smart Sock for the baby's heart rate.
+4. When heart rate falls **below 110 BPM**, the app waits for the current track to finish and transitions to the **white noise playlist**.
+5. The routine ends and the app returns to the setup screen.
 
 ---
 
@@ -24,149 +23,193 @@ The Owlet auth chain goes: Firebase (email/password → idToken) → Owlet SSO m
 | Lullaby (Chopin) | `spotify:playlist:5MKaz5wxcypYQLklyx34J2` |
 | White noise | `spotify:playlist:4Lj9ZugyG3SNEA9XAxGVwx` |
 
-Change these in `lib/routine.js` (Node.js) or `main.py` (Python).
+Change these in `app/src/lib/constants.ts`.
 
 ---
 
 ## Architecture
 
-There are two independent implementations that share the same idea:
+The app is a **React Native** app built with [Expo](https://expo.dev), targeting Android.
 
-### Python (CLI)
-`main.py` → `lib/owlet.py` + `lib/spotify.py`
-
-Simple polling loop. Good for quick tests from the terminal. Uses [spotipy](https://spotipy.readthedocs.io/) for Spotify and a hand-rolled Ayla/Owlet client.
-
-### Node.js (web UI)
-`server.js` → `lib/owlet.js` + `lib/spotify.js` + `lib/routine.js`
-
-Express server with a mobile-friendly dark-theme UI at `/`. Uses Server-Sent Events (SSE) for live heart-rate and status updates. The `BedtimeRoutine` class is an `EventEmitter`-based state machine.
+### Screens
 
 ```
-States: idle → running → transitioning → done
+SetupScreen → MonitoringScreen → DoneScreen
 ```
 
-The web UI is the primary interface — it lets you start/stop the routine from your phone while the sock is on.
+- **SetupScreen** — enter Owlet credentials, connect Spotify via OAuth (PKCE), pick a Spotify device name, then start the routine.
+- **MonitoringScreen** — shows live heart rate, O₂, battery, and currently playing track. Handles the lullaby → white noise transition automatically.
+- **DoneScreen** — confirmation screen shown when the baby is asleep and white noise is playing.
+
+### State machine
+
+```
+idle → running → transitioning → done
+```
+
+Managed by the `useRoutine` hook (`app/src/hooks/useRoutine.ts`). Polls Owlet every 10 seconds and drives Spotify via the Web API.
+
+### Project structure
+
+```
+app/
+├── src/
+│   ├── screens/
+│   │   ├── SetupScreen.tsx       # Credential form + Spotify OAuth
+│   │   ├── MonitoringScreen.tsx  # Live vitals + routine controls
+│   │   └── DoneScreen.tsx        # Completion screen
+│   ├── hooks/
+│   │   └── useRoutine.ts         # Polling loop + state machine
+│   ├── lib/
+│   │   ├── owlet.ts              # Owlet client (Firebase → SSO → Ayla)
+│   │   ├── spotifyApi.ts         # Spotify Web API (direct fetch)
+│   │   ├── spotifyAuth.ts        # OAuth PKCE + SecureStore
+│   │   ├── types.ts              # Shared TypeScript types
+│   │   └── constants.ts          # HR threshold, poll interval, playlist URIs
+│   └── navigation/
+│       └── types.ts              # React Navigation stack param types
+├── e2e/                          # Maestro E2E flows
+├── app.config.js                 # Expo config (reads .env)
+└── app.json                      # App metadata (name, package, scheme)
+```
 
 ---
 
 ## Prerequisites
 
 - **Owlet Smart Sock** (v2 or v3) paired to your Owlet account
-- **Spotify Premium** account (required for playback control and crossfade)
-- A **Spotify Developer app** with `http://localhost:8888/callback` in the redirect URIs
-- Python ≥ 3.12 (CLI path) **or** Node.js (web path)
+- **Spotify Premium** account (required for playback control)
+- A **Spotify Developer app** (see setup below)
+- Android device or emulator (Android Studio)
+
+---
+
+## Spotify app setup
+
+1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) and log in.
+2. Click **Create app** and fill in any name.
+3. Under **Redirect URIs** add: `babu://auth` (and `exp://localhost:8081/--/` for emulator/dev builds)
+4. Under **APIs used** check **Web API**, then save.
+5. Copy the **Client ID** and **Client Secret**.
+6. Go to **Users and Access** and add your Spotify account email (required while the app is in Development mode).
 
 ---
 
 ## Setup
 
-### 1. Clone and install
+### 1. Install dependencies
 
-**Python:**
 ```bash
-pip install poetry
-poetry install
-```
-
-**Node.js:**
-```bash
+cd app
 npm install
 ```
 
-### 2. Configure environment
+### 2. Configure credentials
 
-Copy `.env.example` to `.env` and fill in your credentials:
-
-```bash
-cp .env.example .env
-```
+Create `app/.env`:
 
 ```env
-OWLET_EMAIL=your_owlet_email@example.com
-OWLET_PWD=your_owlet_password
-OWLET_REGION=europe          # "europe" or "world" (US)
-
-SPOTIFY_CLIENT_ID=your_spotify_app_client_id
-SPOTIFY_CLIENT_SECRET=your_spotify_app_client_secret
-SPOTIFY_DEVICE_NAME=iphone   # Spotify device name to target
-
-PORT=3000
+SPOTIFY_CLIENT_ID=your_spotify_client_id
+SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
 ```
 
-> **Spotify app setup:** Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard), create an app, and add `http://localhost:8888/callback` (Python) or `http://localhost:3000/auth/spotify/callback` (Node.js) as a redirect URI.
+Owlet credentials are entered in the app at runtime and saved securely on-device.
 
 ---
 
-## Running
+## Running on an Android emulator
 
-### Python CLI
+### 1. Create a virtual device
 
-```bash
-poetry run python main.py
-```
+Open Android Studio → **Tools → Device Manager** → **+** → Create Virtual Device. Pick a phone (e.g. Pixel 8) and a system image (API 35 recommended).
 
-On first run, Spotipy opens a browser for Spotify OAuth and caches the token locally. The script polls every 10 seconds and prints live heart rate to the console.
+### 2. Start the emulator
 
-### Node.js web server
+Launch the device from Device Manager, or from the terminal:
 
 ```bash
-npm start
-# Open http://localhost:3000 on your phone
+~/Library/Android/sdk/emulator/emulator -avd <your_avd_name>
 ```
 
-1. Visit the UI and tap **Authenticate Spotify** (first time only — token is saved to `.spotify-token.json`).
-2. Tap **Start Routine** — the app starts the Chopin playlist on the configured device and begins monitoring.
-3. Watch the live vitals card update every 10 seconds.
-4. The app automatically transitions to white noise when the baby falls asleep.
+### 3. Add Android tools to your PATH
+
+Add to `~/.zshrc`:
+
+```sh
+export ANDROID_HOME=$HOME/Library/Android/sdk
+export PATH=$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools
+```
+
+Then: `source ~/.zshrc`
+
+### 4. Build and install
+
+```bash
+cd app/android
+ANDROID_HOME=$HOME/Library/Android/sdk ./gradlew assembleRelease
+adb install -r app/build/outputs/apk/release/app-release.apk
+```
 
 ---
 
-## API reference (Node.js server)
+## Running on a physical Android device
 
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/status` | Routine state + last Owlet reading |
-| POST | `/api/routine/start` | Start the bedtime routine |
-| POST | `/api/routine/stop` | Stop the routine |
-| GET | `/api/owlet/reading` | One-shot Owlet reading |
-| GET | `/api/spotify/devices` | List available Spotify devices |
-| GET | `/api/spotify/playback` | Current track + progress |
-| GET | `/auth/spotify` | Redirect to Spotify OAuth |
-| GET | `/auth/spotify/callback` | Spotify OAuth callback |
-| GET | `/api/events` | SSE stream (status, reading, error) |
+### 1. Enable Developer options
+
+Settings → About phone → tap **Build number** 7 times until you see "You are now a developer".
+
+> **Samsung:** Settings → About phone → Software information → Build number.
+> If the tap is blocked by **Auto Blocker**, disable it first: Settings → Security and privacy → Auto Blocker → off.
+
+### 2. Option A — USB
+
+Enable **USB debugging** in Developer options, connect the phone, then build and install:
+
+```bash
+cd app/android
+ANDROID_HOME=$HOME/Library/Android/sdk ./gradlew assembleRelease
+adb install -r app/build/outputs/apk/release/app-release.apk
+```
+
+### 2. Option B — Wireless (no cable)
+
+Both phone and Mac must be on the same Wi-Fi network.
+
+1. Developer options → **Wireless debugging** → enable it
+2. Tap **Pair device with pairing code** — note the IP, port, and 6-digit code
+3. On your Mac:
+   ```bash
+   adb pair <ip>:<pairing-port>
+   # enter the 6-digit code when prompted
+   ```
+4. Connect (use the port shown on the main Wireless debugging screen, not the pairing port):
+   ```bash
+   adb connect <ip>:<connect-port>
+   adb devices   # phone should appear
+   ```
+5. Build and install:
+   ```bash
+   cd app/android
+   ANDROID_HOME=$HOME/Library/Android/sdk ./gradlew assembleRelease
+   adb install -r app/build/outputs/apk/release/app-release.apk
+   ```
+
+---
+
+## Finding your Spotify device name
+
+Open Spotify on your phone → tap the **device icon** (bottom of the player screen). Your device will be listed by name — enter that exact name in the app's Device field on the setup screen.
 
 ---
 
 ## Configuration reference
 
-| Variable | Where | Default | Description |
+| Constant | File | Default | Description |
 |---|---|---|---|
-| `HR_THRESHOLD` | `lib/routine.js`, `main.py` | 110 | BPM below which sleep is detected |
-| `POLL_INTERVAL_MS` | `lib/routine.js` | 10 000 | Owlet polling interval (ms) |
-| Crossfade | `lib/spotify.py` | 6 s | Transition duration between tracks |
-| Restart threshold | `lib/spotify.py`, `lib/routine.js` | 10 s | Re-start Chopin if < 10 s remain |
-
----
-
-## Project structure
-
-```
-baby-sleep/
-├── main.py              # Python CLI entry point
-├── server.js            # Node.js Express server
-├── lib/
-│   ├── owlet.py         # Python Owlet client (Firebase → SSO → Ayla)
-│   ├── owlet.js         # JavaScript Owlet client (same auth chain)
-│   ├── spotify.py       # Python Spotify controller (spotipy)
-│   ├── spotify.js       # JavaScript Spotify controller
-│   └── routine.js       # BedtimeRoutine EventEmitter state machine
-├── public/
-│   └── index.html       # Mobile UI (dark theme, SSE-driven)
-├── .env.example         # Environment variable template
-├── pyproject.toml       # Python/Poetry config
-└── package.json         # Node.js config
-```
+| `HR_THRESHOLD` | `src/lib/constants.ts` | 110 | BPM below which sleep is detected |
+| `POLL_INTERVAL_MS` | `src/lib/constants.ts` | 10 000 | Owlet polling interval (ms) |
+| `CHOPIN_PLAYLIST` | `src/lib/constants.ts` | — | Lullaby playlist URI |
+| `WHITENOISE_PLAYLIST` | `src/lib/constants.ts` | — | Sleep playlist URI |
 
 ---
 
@@ -174,5 +217,4 @@ baby-sleep/
 
 - Spotify Premium is required — free accounts cannot control playback via the API.
 - The Owlet integration uses an unofficial reverse-engineered API. It may break if Owlet updates their backend.
-- The Python and Node.js Owlet clients are independent ports of the same auth logic; keep them in sync if you patch the auth flow.
-- `OWLET_REGION=europe` points to the EU Ayla endpoint; use `world` for North America.
+- `OWLET_REGION=europe` (entered in the app) points to the EU Ayla endpoint; leave blank for North America.

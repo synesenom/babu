@@ -58,7 +58,7 @@ async function getMiniToken(idToken: string, cfg: RegionConfig): Promise<string>
 async function aylaSignIn(miniToken: string, cfg: RegionConfig): Promise<{ token: string; ttl: number }> {
   const resp = await fetch(cfg.url_signin, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
       app_id: cfg.app_id,
       app_secret: cfg.app_secret,

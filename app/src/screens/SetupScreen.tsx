@@ -10,6 +10,7 @@ import {
   SafeAreaView,
   KeyboardAvoidingView,
   Platform,
+  Switch,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import * as SecureStore from 'expo-secure-store';
@@ -44,6 +45,9 @@ export default function SetupScreen({ navigation }: Props) {
   const [password, setPassword] = useState(MOCK_MODE ? 'password' : '');
   const [region, setRegion] = useState<OwletRegion>('world');
   const [deviceName, setDeviceName] = useState('iphone');
+  const [monitorOnly, setMonitorOnly] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [owletStatus, setOwletStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
   const [initialising, setInitialising] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [storedTokens, setStoredTokens] = useState<SpotifyTokens | null>(null);
@@ -56,7 +60,22 @@ export default function SetupScreen({ navigation }: Props) {
       if (stored) setStoredTokens(stored);
       if (!MOCK_MODE) {
         const savedEmail = await SecureStore.getItemAsync('owlet_email');
+        const savedPassword = await SecureStore.getItemAsync('owlet_password');
+        const savedRegion = await SecureStore.getItemAsync('owlet_region');
         if (savedEmail) setEmail(savedEmail);
+        if (savedPassword) setPassword(savedPassword);
+        const effectiveRegion = (savedRegion as OwletRegion | null) ?? 'world';
+        if (savedRegion) setRegion(effectiveRegion);
+        if (savedEmail && savedPassword) {
+          setOwletStatus('checking');
+          try {
+            await Owlet.create(savedEmail, savedPassword, effectiveRegion);
+            setOwletStatus('ok');
+          } catch (e: unknown) {
+            setOwletStatus('error');
+            setError(e instanceof Error ? e.message : String(e));
+          }
+        }
       }
     })();
   }, []);
@@ -67,6 +86,19 @@ export default function SetupScreen({ navigation }: Props) {
   async function handleMockConnect() {
     await saveTokens(MOCK_SPOTIFY_TOKENS);
     setStoredTokens(MOCK_SPOTIFY_TOKENS);
+  }
+
+  async function checkOwlet() {
+    if (MOCK_MODE || !email || !password) return;
+    setOwletStatus('checking');
+    setError(null);
+    try {
+      await Owlet.create(email, password, region);
+      setOwletStatus('ok');
+    } catch (e: unknown) {
+      setOwletStatus('error');
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   async function handleStart() {
@@ -99,11 +131,14 @@ export default function SetupScreen({ navigation }: Props) {
           tokens: MOCK_SPOTIFY_TOKENS,
           deviceName: 'mock',
           pollIntervalMs: 500,
+          monitorOnly,
         });
       } else {
         await SecureStore.setItemAsync('owlet_email', email);
+        await SecureStore.setItemAsync('owlet_password', password);
+        await SecureStore.setItemAsync('owlet_region', region);
         const owlet = await Owlet.create(email, password, region);
-        navigation.navigate('Monitoring', { owlet, tokens: effectiveTokens, deviceName });
+        navigation.navigate('Monitoring', { owlet, tokens: effectiveTokens, deviceName, monitorOnly });
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -121,25 +156,34 @@ export default function SetupScreen({ navigation }: Props) {
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <Text style={styles.title}>babu</Text>
 
-          <Text style={styles.sectionLabel}>Owlet</Text>
+          <View style={styles.sectionLabelRow}>
+            <Text style={[styles.sectionLabel, { marginTop: 0, marginBottom: 0 }]}>Owlet</Text>
+            <View style={[styles.statusDot, { backgroundColor: owletStatus === 'ok' ? '#3fb950' : owletStatus === 'error' ? '#f85149' : owletStatus === 'checking' ? '#e3b341' : '#8b949e' }]} />
+          </View>
           <View style={styles.card}>
             <TextInput
               style={styles.input}
               placeholder="Email"
               placeholderTextColor="#8b949e"
               value={email}
-              onChangeText={setEmail}
+              onChangeText={(v) => { setEmail(v); setOwletStatus('idle'); }}
               autoCapitalize="none"
               keyboardType="email-address"
             />
-            <TextInput
-              style={styles.input}
-              placeholder="Password"
-              placeholderTextColor="#8b949e"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-            />
+            <View style={styles.passwordRow}>
+              <TextInput
+                style={[styles.input, styles.passwordInput]}
+                placeholder="Password"
+                placeholderTextColor="#8b949e"
+                value={password}
+                onChangeText={(v) => { setPassword(v); setOwletStatus('idle'); }}
+                onBlur={checkOwlet}
+                secureTextEntry={!showPassword}
+              />
+              <TouchableOpacity style={styles.eyeButton} onPress={() => setShowPassword((v) => !v)}>
+                <Text style={styles.eyeText}>{showPassword ? '🙈' : '👁'}</Text>
+              </TouchableOpacity>
+            </View>
             <View style={styles.pickerWrapper}>
               <Picker
                 selectedValue={region}
@@ -162,6 +206,8 @@ export default function SetupScreen({ navigation }: Props) {
               </View>
             ) : (
               <TouchableOpacity
+                testID="connect-spotify-button"
+                accessibilityLabel="Connect Spotify"
                 style={styles.button}
                 onPress={MOCK_MODE ? handleMockConnect : promptAsync}
                 disabled={authLoading}
@@ -187,6 +233,23 @@ export default function SetupScreen({ navigation }: Props) {
             />
           </View>
 
+          <Text style={styles.sectionLabel}>Options</Text>
+          <View style={styles.card}>
+            <View style={styles.switchRow}>
+              <View>
+                <Text style={styles.switchLabel}>Monitor only</Text>
+                <Text style={styles.switchHint}>Watch vitals without triggering transition</Text>
+              </View>
+              <Switch
+                testID="monitor-only-switch"
+                value={monitorOnly}
+                onValueChange={setMonitorOnly}
+                trackColor={{ false: '#30363d', true: '#388bfd' }}
+                thumbColor="#ffffff"
+              />
+            </View>
+          </View>
+
           {error ? (
             <View style={styles.errorBanner}>
               <Text style={styles.errorText}>{error}</Text>
@@ -194,6 +257,8 @@ export default function SetupScreen({ navigation }: Props) {
           ) : null}
 
           <TouchableOpacity
+            testID="start-routine-button"
+            accessibilityLabel="Start Routine"
             style={[styles.startButton, (!isConnected || initialising) && styles.startButtonDisabled]}
             onPress={handleStart}
             disabled={!isConnected || initialising}
@@ -220,6 +285,7 @@ const styles = StyleSheet.create({
   },
   scroll: {
     padding: 24,
+    paddingTop: 72,
     paddingBottom: 48,
   },
   title: {
@@ -230,6 +296,12 @@ const styles = StyleSheet.create({
     marginBottom: 36,
     letterSpacing: 2,
   },
+  sectionLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    marginTop: 16,
+  },
   sectionLabel: {
     color: '#8b949e',
     fontSize: 12,
@@ -238,6 +310,13 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginBottom: 8,
     marginTop: 16,
+    alignSelf: 'flex-start',
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginLeft: 8,
   },
   card: {
     backgroundColor: '#161b22',
@@ -253,6 +332,23 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#30363d',
+  },
+  passwordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#30363d',
+  },
+  passwordInput: {
+    flex: 1,
+    borderBottomWidth: 0,
+  },
+  eyeButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  eyeText: {
+    fontSize: 16,
   },
   pickerWrapper: {
     borderBottomWidth: 0,
@@ -288,6 +384,22 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  switchLabel: {
+    color: '#c9d1d9',
+    fontSize: 16,
+  },
+  switchHint: {
+    color: '#8b949e',
+    fontSize: 12,
+    marginTop: 2,
   },
   errorBanner: {
     backgroundColor: '#3d1d1d',

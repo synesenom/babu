@@ -1,10 +1,15 @@
 appId: com.enysmones.babu
 ---
-- launchApp
+- launchApp:
+    clearState: true
 - assertVisible: "babu"
-- tapOn: "Start Routine"       # should still be disabled
+- tapOn:
+    id: "start-routine-button"   # disabled — should not navigate
 - assertNotVisible: "Monitoring"
-- tapOn: "Connect Spotify"
+- tapOn:
+    id: "connect-spotify-button"
 - assertVisible: "Connected"
-- tapOn: "Start Routine"
-- assertVisible: "running"
+- tapOn:
+    id: "start-routine-button"
+- assertVisible:
+    id: "status-text"

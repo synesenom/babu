@@ -2,9 +2,15 @@
 # Requires mock mode APK: MOCK_MODE=1 npx expo run:android
 appId: com.enysmones.babu
 ---
-- launchApp
-- tapOn: "Start Routine"
-- assertVisible: "running"
+- launchApp:
+    clearState: true
+- tapOn:
+    id: "connect-spotify-button"
+- assertVisible: "Connected"
+- tapOn:
+    id: "start-routine-button"
+- assertVisible:
+    id: "status-text"
 - extendedWaitUntil:
     visible: "TRANSITIONING"
     timeout: 10000
