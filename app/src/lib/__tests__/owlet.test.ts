@@ -61,10 +61,51 @@ describe('Owlet.create()', () => {
     await expect(Owlet.create('test@example.com', 'wrongpass')).rejects.toThrow(OwletError);
   });
 
+  it('throws OwletError when Firebase returns 200 but no idToken', async () => {
+    fetchMock.mockResponseOnce(JSON.stringify({ no_token: true }), { status: 200 });
+    await expect(Owlet.create('test@example.com', 'password')).rejects.toThrow(OwletError);
+  });
+
+  it('throws OwletError when SSO request returns non-ok status', async () => {
+    fetchMock.mockResponses(
+      [JSON.stringify(FIREBASE_OK), { status: 200 }],
+      ['Forbidden', { status: 403 }],
+    );
+    await expect(Owlet.create('test@example.com', 'password')).rejects.toThrow(OwletError);
+  });
+
   it('throws OwletError when SSO returns missing mini_token', async () => {
     fetchMock.mockResponses(
       [JSON.stringify(FIREBASE_OK), { status: 200 }],
       [JSON.stringify({ not_a_mini_token: true }), { status: 200 }],
+    );
+    await expect(Owlet.create('test@example.com', 'password')).rejects.toThrow(OwletError);
+  });
+
+  it('throws OwletError when Ayla sign-in returns non-200/201', async () => {
+    fetchMock.mockResponses(
+      [JSON.stringify(FIREBASE_OK), { status: 200 }],
+      [JSON.stringify(MINI_TOKEN_OK), { status: 200 }],
+      ['Server Error', { status: 500 }],
+    );
+    await expect(Owlet.create('test@example.com', 'password')).rejects.toThrow(OwletError);
+  });
+
+  it('throws OwletError when Ayla sign-in returns 200 but no access_token', async () => {
+    fetchMock.mockResponses(
+      [JSON.stringify(FIREBASE_OK), { status: 200 }],
+      [JSON.stringify(MINI_TOKEN_OK), { status: 200 }],
+      [JSON.stringify({ no_token: true }), { status: 200 }],
+    );
+    await expect(Owlet.create('test@example.com', 'password')).rejects.toThrow(OwletError);
+  });
+
+  it('throws OwletError when device list request returns non-ok', async () => {
+    fetchMock.mockResponses(
+      [JSON.stringify(FIREBASE_OK), { status: 200 }],
+      [JSON.stringify(MINI_TOKEN_OK), { status: 200 }],
+      [JSON.stringify(AYLA_SIGNIN_OK), { status: 200 }],
+      ['Unauthorized', { status: 401 }],
     );
     await expect(Owlet.create('test@example.com', 'password')).rejects.toThrow(OwletError);
   });
@@ -143,6 +184,30 @@ describe('read()', () => {
     expect(result.movement).toBe('moving');   // MOVEMENT === 1
     expect(result.sock_off).toBe(false);       // SOCK_OFF === 0
     expect(result.sock_connected).toBe(true);  // SOCK_CONNECTION === 1
+  });
+
+  it('throws OwletError when activate returns non-200/201', async () => {
+    const owlet = await makeOwlet();
+    fetchMock.resetMocks();
+    fetchMock.mockResponseOnce('Server Error', { status: 500 });
+
+    // activate throws before the 2s setTimeout fires, so no timer advancement needed
+    await expect(owlet.read()).rejects.toThrow(OwletError);
+  });
+
+  it('throws OwletError when getProps returns non-ok', async () => {
+    const owlet = await makeOwlet();
+    fetchMock.resetMocks();
+    fetchMock.mockResponses(
+      [JSON.stringify(ACTIVATE_OK), { status: 201 }],
+      ['Forbidden', { status: 403 }],
+    );
+
+    // Attach catch handler before advancing timers so the rejection is handled
+    const p = owlet.read();
+    const captured = p.catch((e) => e as Error);
+    await jest.runAllTimersAsync();
+    expect(await captured).toBeInstanceOf(OwletError);
   });
 
   it('re-authenticates when token is expired', async () => {
