@@ -719,7 +719,7 @@ rmdir lib/
 | 5 | `src/lib/spotifyApi.ts` | Spotify Web API (direct fetch) | ✅ |
 | 6 | `src/lib/spotifyAuth.ts` | OAuth PKCE + SecureStore | ✅ |
 | 7 | `src/lib/__tests__/spotifyApi.test.ts` | Spotify unit tests | ✅ |
-| 8 | `src/hooks/useRoutine.ts` | Routine state machine hook | |
+| 8 | `src/hooks/useRoutine.ts` | Routine state machine hook | ✅ |
 | 9 | `src/hooks/__tests__/useRoutine.test.ts` | ~~Routine hook tests~~ (skipped) | |
 | 10 | `App.tsx` + screen stubs | Navigation wiring | |
 | 11 | `src/screens/SetupScreen.tsx` | Credential form + OAuth | |
