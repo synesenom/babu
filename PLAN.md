@@ -716,7 +716,7 @@ rmdir lib/
 | 2 | `src/lib/types.ts`, `constants.ts` | Shared types and config | ✅ |
 | 3 | `src/lib/owlet.ts` | Owlet client TypeScript port | ✅ |
 | 4 | `src/lib/__tests__/owlet.test.ts` | ~~Owlet unit tests + fixtures~~ (skipped) | ✅ |
-| 5 | `src/lib/spotifyApi.ts` | Spotify Web API (direct fetch) | |
+| 5 | `src/lib/spotifyApi.ts` | Spotify Web API (direct fetch) | ✅ |
 | 6 | `src/lib/spotifyAuth.ts` | OAuth PKCE + SecureStore | |
 | 7 | `src/lib/__tests__/spotifyApi.test.ts` | ~~Spotify unit tests~~ (skipped) | ✅ |
 | 8 | `src/hooks/useRoutine.ts` | Routine state machine hook | |
