@@ -1,0 +1,13 @@
+# Verifies: Setup → Monitoring (shows vitals) → auto-advance to Done
+# Requires mock mode APK: MOCK_MODE=1 npx expo run:android
+appId: com.enysmones.babu
+---
+- launchApp
+- tapOn: "Start Routine"
+- assertVisible: "running"
+- extendedWaitUntil:
+    visible: "TRANSITIONING"
+    timeout: 10000
+- extendedWaitUntil:
+    visible: "Your baby is asleep"
+    timeout: 10000

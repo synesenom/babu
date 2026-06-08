@@ -16,51 +16,95 @@ import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
-import { useSpotifyAuth, loadStoredTokens } from '../lib/spotifyAuth';
+import { useSpotifyAuth, loadStoredTokens, saveTokens } from '../lib/spotifyAuth';
 import { Owlet } from '../lib/owlet';
-import type { OwletRegion } from '../lib/types';
+import type { OwletReading, OwletRegion, SpotifyTokens } from '../lib/types';
+import { MOCK_TOKEN } from '../lib/constants';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Setup'>;
 
 const extra = Constants.expoConfig?.extra as {
   spotifyClientId?: string;
   spotifyClientSecret?: string;
+  mockMode?: boolean;
 } | undefined;
 
 const CLIENT_ID = extra?.spotifyClientId ?? '';
 const CLIENT_SECRET = extra?.spotifyClientSecret ?? '';
+const MOCK_MODE = extra?.mockMode ?? false;
+
+const MOCK_SPOTIFY_TOKENS: SpotifyTokens = {
+  access_token: MOCK_TOKEN,
+  refresh_token: 'mock-refresh',
+  expires_at: Date.now() + 86_400_000,
+};
 
 export default function SetupScreen({ navigation }: Props) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState(MOCK_MODE ? 'test@example.com' : '');
+  const [password, setPassword] = useState(MOCK_MODE ? 'password' : '');
   const [region, setRegion] = useState<OwletRegion>('world');
   const [deviceName, setDeviceName] = useState('iphone');
   const [initialising, setInitialising] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [storedTokens, setStoredTokens] = useState<SpotifyTokens | null>(null);
 
   const { tokens, promptAsync, isLoading: authLoading } = useSpotifyAuth(CLIENT_ID, CLIENT_SECRET);
 
   useEffect(() => {
     (async () => {
       const stored = await loadStoredTokens();
-      if (stored && !tokens) {
-        // tokens already restored inside useSpotifyAuth on its own mount
+      if (stored) setStoredTokens(stored);
+      if (!MOCK_MODE) {
+        const savedEmail = await SecureStore.getItemAsync('owlet_email');
+        if (savedEmail) setEmail(savedEmail);
       }
-      const savedEmail = await SecureStore.getItemAsync('owlet_email');
-      if (savedEmail) setEmail(savedEmail);
     })();
   }, []);
 
-  const isConnected = tokens !== null;
+  const effectiveTokens = tokens ?? storedTokens;
+  const isConnected = effectiveTokens !== null;
+
+  async function handleMockConnect() {
+    await saveTokens(MOCK_SPOTIFY_TOKENS);
+    setStoredTokens(MOCK_SPOTIFY_TOKENS);
+  }
 
   async function handleStart() {
-    if (!isConnected || !tokens) return;
+    if (!isConnected || !effectiveTokens) return;
     setError(null);
     setInitialising(true);
     try {
-      await SecureStore.setItemAsync('owlet_email', email);
-      const owlet = await Owlet.create(email, password, region);
-      navigation.navigate('Monitoring', { owlet, tokens, deviceName });
+      if (MOCK_MODE) {
+        let tickCount = 0;
+        const mockOwlet = {
+          read: async (): Promise<OwletReading> => {
+            tickCount += 1;
+            return {
+              heart_rate: tickCount <= 2 ? 120 : 90,
+              oxygen: 98,
+              battery: 80,
+              movement: 'still',
+              sock_off: false,
+              sock_connected: true,
+              base_on: true,
+              charging: false,
+              dsn: 'mock-dsn',
+              timestamp: new Date().toISOString(),
+              raw: {},
+            };
+          },
+        } as unknown as Owlet;
+        navigation.navigate('Monitoring', {
+          owlet: mockOwlet,
+          tokens: MOCK_SPOTIFY_TOKENS,
+          deviceName: 'mock',
+          pollIntervalMs: 500,
+        });
+      } else {
+        await SecureStore.setItemAsync('owlet_email', email);
+        const owlet = await Owlet.create(email, password, region);
+        navigation.navigate('Monitoring', { owlet, tokens: effectiveTokens, deviceName });
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -119,7 +163,7 @@ export default function SetupScreen({ navigation }: Props) {
             ) : (
               <TouchableOpacity
                 style={styles.button}
-                onPress={promptAsync}
+                onPress={MOCK_MODE ? handleMockConnect : promptAsync}
                 disabled={authLoading}
               >
                 {authLoading ? (

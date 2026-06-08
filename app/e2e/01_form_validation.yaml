@@ -1,0 +1,10 @@
+appId: com.enysmones.babu
+---
+- launchApp
+- assertVisible: "babu"
+- tapOn: "Start Routine"       # should still be disabled
+- assertNotVisible: "Monitoring"
+- tapOn: "Connect Spotify"
+- assertVisible: "Connected"
+- tapOn: "Start Routine"
+- assertVisible: "running"

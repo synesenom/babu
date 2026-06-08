@@ -22,8 +22,8 @@ const STATUS_COLORS: Record<RoutineStatus, string> = {
 };
 
 export default function MonitoringScreen({ route, navigation }: Props) {
-  const { owlet, tokens, deviceName } = route.params;
-  const { state, start, stop } = useRoutine(owlet, tokens, deviceName);
+  const { owlet, tokens, deviceName, pollIntervalMs } = route.params;
+  const { state, start, stop } = useRoutine(owlet, tokens, deviceName, pollIntervalMs);
   const [errorDismissed, setErrorDismissed] = useState(false);
 
   useEffect(() => {
