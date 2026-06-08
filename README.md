@@ -1,5 +1,7 @@
 # baby-sleep
 
+[![Coverage](https://codecov.io/gh/synesenom/baby-sleep/graph/badge.svg)](https://codecov.io/gh/synesenom/baby-sleep)
+
 Automated bedtime routine that monitors a baby's heart rate via the **Owlet Smart Sock** and controls **Spotify** playback accordingly. Starts with Chopin nocturnes and switches to white noise once the heart rate drops below the sleep threshold.
 
 ---
