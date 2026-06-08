@@ -1,4 +1,5 @@
 export const HR_THRESHOLD = 110;
+export const MOCK_TOKEN = '__babu_mock__';
 export const POLL_INTERVAL_MS = 10_000;
 export const RESTART_THRESHOLD_SECONDS = 10;
 

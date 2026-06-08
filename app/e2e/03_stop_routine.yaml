@@ -1,0 +1,7 @@
+appId: com.enysmones.babu
+---
+- launchApp
+- tapOn: "Start Routine"
+- assertVisible: "running"
+- tapOn: "Stop"
+- assertVisible: "babu"   # back on Setup

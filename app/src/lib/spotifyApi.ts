@@ -1,4 +1,5 @@
 import type { SpotifyDevice, SpotifyPlayback, SpotifyTokens } from './types';
+import { MOCK_TOKEN } from './constants';
 
 const SPOTIFY_API = 'https://api.spotify.com/v1';
 
@@ -22,6 +23,7 @@ async function spotifyFetch(url: string, token: string, options: RequestInit = {
 }
 
 export async function getDevices(token: string): Promise<SpotifyDevice[]> {
+  if (token === MOCK_TOKEN) return [];
   const res = await spotifyFetch(`${SPOTIFY_API}/me/player/devices`, token);
   if (!res.ok) {
     throw new SpotifyError(res.status, `getDevices failed: ${res.status}`);
@@ -37,6 +39,7 @@ export async function getDevices(token: string): Promise<SpotifyDevice[]> {
 }
 
 export async function getCurrentPlayback(token: string): Promise<SpotifyPlayback | null> {
+  if (token === MOCK_TOKEN) return null;
   const res = await spotifyFetch(`${SPOTIFY_API}/me/player`, token);
   if (res.status === 204) return null;
   if (!res.ok) {
@@ -70,6 +73,7 @@ export async function getRemainingSeconds(token: string): Promise<number | null>
 }
 
 export async function startPlaylist(token: string, playlistUri: string, deviceId: string): Promise<boolean> {
+  if (token === MOCK_TOKEN) return true;
   const url = `${SPOTIFY_API}/me/player/play?device_id=${encodeURIComponent(deviceId)}`;
   const res = await spotifyFetch(url, token, {
     method: 'PUT',
@@ -79,6 +83,7 @@ export async function startPlaylist(token: string, playlistUri: string, deviceId
 }
 
 export async function pause(token: string, deviceId?: string): Promise<boolean> {
+  if (token === MOCK_TOKEN) return true;
   const url = deviceId
     ? `${SPOTIFY_API}/me/player/pause?device_id=${encodeURIComponent(deviceId)}`
     : `${SPOTIFY_API}/me/player/pause`;
@@ -87,6 +92,7 @@ export async function pause(token: string, deviceId?: string): Promise<boolean> 
 }
 
 export async function play(token: string, deviceId?: string): Promise<boolean> {
+  if (token === MOCK_TOKEN) return true;
   const url = deviceId
     ? `${SPOTIFY_API}/me/player/play?device_id=${encodeURIComponent(deviceId)}`
     : `${SPOTIFY_API}/me/player/play`;
@@ -95,6 +101,7 @@ export async function play(token: string, deviceId?: string): Promise<boolean> {
 }
 
 export async function findDeviceByName(token: string, nameSubstring: string): Promise<string | null> {
+  if (token === MOCK_TOKEN) return 'mock-device-id';
   const devices = await getDevices(token);
   const match = devices.find((d) =>
     d.name.toLowerCase().includes(nameSubstring.toLowerCase())

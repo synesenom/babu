@@ -51,6 +51,7 @@ export function useRoutine(
   owlet: Owlet | null,
   tokens: SpotifyTokens | null,
   deviceName: string,
+  pollIntervalMs: number = POLL_INTERVAL_MS,
 ): {
   state: RoutineState;
   start: () => void;
@@ -106,7 +107,7 @@ export function useRoutine(
 
   const start = useCallback(() => {
     dispatch({ type: 'START' });
-    intervalRef.current = setInterval(tick, POLL_INTERVAL_MS);
+    intervalRef.current = setInterval(tick, pollIntervalMs);
   }, [tick]);
 
   const stop = useCallback(() => {
