@@ -8,17 +8,42 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: app/package-lock.json
+
       - run: npm ci
         working-directory: app
+
       - run: npm run test:coverage
         working-directory: app
-      - uses: codecov/codecov-action@v4
-        with:
-          directory: app/coverage
+
+      - name: Parse coverage percentage
+        id: cov
+        run: |
+          PCT=$(node -p "Math.round(require('./app/coverage/coverage-summary.json').total.lines.pct)")
+          if   [ "$PCT" -ge 80 ]; then COLOR=brightgreen
+          elif [ "$PCT" -ge 60 ]; then COLOR=yellow
+          else COLOR=red
+          fi
+          echo "pct=$PCT" >> $GITHUB_OUTPUT
+          echo "color=$COLOR" >> $GITHUB_OUTPUT
+
+      - name: Update coverage badge in README
+        run: |
+          sed -i 's|https://img\.shields\.io/badge/coverage-[^)]*|https://img.shields.io/badge/coverage-${{ steps.cov.outputs.pct }}%25-${{ steps.cov.outputs.color }}|' README.md
+
+      - name: Commit badge update
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --staged --quiet || (git commit -m "Update coverage badge [skip ci]" && git push)

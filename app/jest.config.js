@@ -9,5 +9,5 @@ module.exports = {
     '!src/**/__tests__/**',
     '!src/**/__mocks__/**',
   ],
-  coverageReporters: ['lcov', 'text-summary'],
+  coverageReporters: ['lcov', 'json-summary', 'text-summary'],
 };
