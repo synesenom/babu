@@ -5,6 +5,8 @@ import {
   getCurrentPlayback,
   getRemainingSeconds,
   startPlaylist,
+  pause,
+  play,
   findDeviceByName,
   refreshAccessToken,
 } from '../spotifyApi';
@@ -107,6 +109,14 @@ describe('getCurrentPlayback()', () => {
 
     expect(result).toBeNull();
   });
+
+  it('throws SpotifyError on non-204 error response', async () => {
+    fetchMock.mockResponse('Forbidden', { status: 403 });
+
+    const err = await getCurrentPlayback(TOKEN).catch((e) => e);
+    expect(err).toBeInstanceOf(SpotifyError);
+    expect(err.status).toBe(403);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -161,6 +171,58 @@ describe('startPlaylist()', () => {
     expect(url).toContain(`device_id=${encodeURIComponent(deviceId)}`);
     expect(options?.method).toBe('PUT');
     expect(JSON.parse(options?.body as string)).toEqual({ context_uri: playlistUri });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pause()
+// ---------------------------------------------------------------------------
+
+describe('pause()', () => {
+  it('sends PUT to pause endpoint without device_id when omitted', async () => {
+    fetchMock.mockResponseOnce('', { status: 204 });
+
+    const result = await pause(TOKEN);
+
+    expect(result).toBe(true);
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://api.spotify.com/v1/me/player/pause');
+    expect(options?.method).toBe('PUT');
+  });
+
+  it('includes device_id query param when provided', async () => {
+    fetchMock.mockResponseOnce('', { status: 204 });
+
+    await pause(TOKEN, 'dev1');
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain('device_id=dev1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// play()
+// ---------------------------------------------------------------------------
+
+describe('play()', () => {
+  it('sends PUT to play endpoint without device_id when omitted', async () => {
+    fetchMock.mockResponseOnce('', { status: 204 });
+
+    const result = await play(TOKEN);
+
+    expect(result).toBe(true);
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://api.spotify.com/v1/me/player/play');
+    expect(options?.method).toBe('PUT');
+  });
+
+  it('includes device_id query param when provided', async () => {
+    fetchMock.mockResponseOnce('', { status: 204 });
+
+    await play(TOKEN, 'dev1');
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain('device_id=dev1');
   });
 });
 
