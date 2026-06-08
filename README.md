@@ -1,6 +1,6 @@
 # baby-sleep
 
-![Coverage](https://img.shields.io/badge/coverage-91%25-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen)
 
 Automated bedtime routine that monitors a baby's heart rate via the **Owlet Smart Sock** and controls **Spotify** playback accordingly. Starts with Chopin nocturnes and switches to white noise once the heart rate drops below the sleep threshold.
 
