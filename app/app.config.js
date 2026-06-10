@@ -1,3 +1,4 @@
+require('dotenv').config({ path: require('path').join(__dirname, '.env'), override: true });
 const base = require('./app.json').expo;
 
 module.exports = {
