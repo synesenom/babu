@@ -2,116 +2,111 @@
 
 ## Project overview
 
-Bedtime automation: Owlet Smart Sock heart rate → Spotify playlist control. When the baby's BPM drops below 110, the app switches from Chopin nocturnes to white noise. There are two independent implementations — Python (CLI) and Node.js (web server) — that share the same conceptual design.
+Bedtime automation: Owlet Smart Sock heart rate → Spotify playlist control. When the baby's BPM drops below the threshold, the app switches from Chopin nocturnes to white noise. The project is a single React Native (Expo) app for Android, written in TypeScript. It lives entirely in `app/`.
 
 ---
 
 ## Repository layout
 
 ```
-main.py          Python CLI — entry point for the polling loop
-server.js        Node.js Express server — REST API + SSE + web UI
-lib/owlet.py     Python Owlet client
-lib/owlet.js     JavaScript Owlet client (same auth chain, native fetch)
-lib/spotify.py   Python Spotify controller (spotipy)
-lib/spotify.js   JavaScript Spotify controller (spotify-web-api-node)
-lib/routine.js   BedtimeRoutine EventEmitter state machine (Node.js only)
-public/index.html Mobile-optimized dark-theme UI, driven by SSE
-.env.example     Canonical list of required env vars
-pyproject.toml   Poetry — Python >=3.12,<3.13
-package.json     Node.js dependencies
+app/
+├── src/
+│   ├── screens/
+│   │   ├── SetupScreen.tsx       Credential form + Spotify OAuth + device picker
+│   │   ├── MonitoringScreen.tsx  Live vitals + routine controls
+│   │   └── DoneScreen.tsx        Completion screen (resets nav stack)
+│   ├── hooks/
+│   │   └── useRoutine.ts         Polling loop + state machine (useReducer)
+│   ├── lib/
+│   │   ├── owlet.ts              Owlet client (Firebase → SSO → Ayla auth chain)
+│   │   ├── spotifyApi.ts         Spotify Web API via direct fetch
+│   │   ├── spotifyAuth.ts        OAuth PKCE + expo-secure-store persistence
+│   │   ├── types.ts              Shared TypeScript types
+│   │   ├── constants.ts          Thresholds, playlists, Owlet region endpoints
+│   │   ├── __tests__/            Jest unit tests
+│   │   └── __mocks__/fixtures.ts Shared test fixtures
+│   └── navigation/types.ts       React Navigation stack param types
+├── e2e/                          Maestro E2E flows
+├── app.config.js                 Expo config — injects app/.env values into expo.extra
+├── app.json                      App metadata (name "Babu", package, scheme "babu://")
+├── jest.config.js, jest.setup.ts Jest (jest-expo preset)
+└── package.json
+PLAN.md                           Migration plan (historical, all steps complete)
 ```
+
+The old Python CLI and Node.js web server were removed after the React Native migration (see `PLAN.md` step 15).
 
 ---
 
 ## Running the project
 
-**Python:**
 ```bash
-poetry run python main.py
+cd app
+npm install
+npx expo run:android     # build + install on emulator/device, starts Metro
+npm test                 # Jest unit tests
+npm run test:coverage    # coverage (CI updates the README badge from this)
+maestro test e2e/        # E2E flows
 ```
 
-**Node.js:**
-```bash
-npm start          # http://localhost:3000
-```
-
-The Node.js path is the primary interface. Use Python only for quick one-off tests or debugging the Owlet connection.
+`MOCK_MODE=1` in `app/.env` stubs all Spotify calls (`MOCK_TOKEN` short-circuits in `spotifyApi.ts`) for UI development.
 
 ---
 
-## Key constants (change here when tweaking behavior)
+## Key constants (`app/src/lib/constants.ts`)
 
-| Constant | File | Value | Meaning |
-|---|---|---|---|
-| `HR_THRESHOLD` | `lib/routine.js`, `main.py` | 110 BPM | Sleep detection threshold |
-| `POLL_INTERVAL_MS` | `lib/routine.js` | 10 000 ms | Owlet polling interval |
-| `CHOPIN_PLAYLIST` | `lib/routine.js` | `spotify:playlist:5MKaz5wxcypYQLklyx34J2` | Lullaby playlist |
-| `WHITENOISE_PLAYLIST` | `lib/routine.js` | `spotify:playlist:4Lj9ZugyG3SNEA9XAxGVwx` | Sleep playlist |
-
-The Python `main.py` hardcodes the same playlist URIs directly.
+| Constant | Value | Meaning |
+|---|---|---|
+| `HR_THRESHOLD` | 120 BPM | Sleep detection threshold |
+| `POLL_INTERVAL_MS` | 5 000 ms | Owlet/Spotify polling interval |
+| `RESTART_THRESHOLD_SECONDS` | 5 s | Restart Chopin if track is ending / nothing playing |
+| `CHOPIN_PLAYLIST` | `spotify:playlist:5MKaz5wxcypYQLklyx34J2` | Lullaby playlist |
+| `WHITENOISE_PLAYLIST` | `spotify:playlist:4Lj9ZugyG3SNEA9XAxGVwx` | Sleep playlist |
 
 ---
 
 ## Architecture notes
 
-### Owlet auth chain
-Both `owlet.py` and `owlet.js` implement the same three-step flow:
+### Owlet auth chain (`app/src/lib/owlet.ts`)
+Three-step flow:
 1. Firebase sign-in (email + password → `idToken` JWT)
-2. Owlet SSO mini-token request (uses Android spoofing headers to bypass API key validation)
+2. Owlet SSO mini-token request (Android spoofing headers bypass API key validation)
 3. Ayla Networks `token_sign_in` → `access_token` used for all device calls
 
-EU region uses a separate Ayla endpoint. Token refresh is handled automatically before expiry.
+EU region uses separate Firebase/Ayla endpoints (`OWLET_REGIONS` in `constants.ts`). Token refresh is handled automatically before expiry. Both firmware variants supported: new `REAL_TIME_VITALS` JSON property and old individual properties (`HEART_RATE`, `OXYGEN_LEVEL`, …). Uses a manual `AbortController` for timeouts (Hermes has no `AbortSignal.timeout()`).
 
-Both clients support two firmware variants:
-- New: `REAL_TIME_VITALS` property (JSON blob)
-- Old: individual properties (`HEART_RATE`, `OXYGEN_LEVEL`, etc.)
-
-### `read()` return shape (both clients)
+### `Owlet.read()` return shape
 ```
 {
-  heart_rate: int | None,
-  oxygen: int | None,
-  battery: int | None,
-  movement: "still" | "moving" | None,
-  sock_off: bool,
-  base_on: bool,
-  charging: bool,
-  sock_connected: bool,
-  dsn: str,
-  timestamp: str,   // "YYYY-MM-DD HH:MM:SS"
-  raw: dict,        // full Ayla property dump
+  heart_rate: number | null,
+  oxygen: number | null,
+  battery: number | null,
+  movement: "still" | "moving" | null,
+  sock_off: boolean,
+  base_on: boolean,
+  charging: boolean,
+  sock_connected: boolean,
+  dsn: string,
+  timestamp: string,   // "YYYY-MM-DD HH:MM:SS"
+  raw: object,         // full Ayla property dump
 }
 ```
 
-### BedtimeRoutine state machine (`lib/routine.js`)
+### Routine state machine (`app/src/hooks/useRoutine.ts`)
 ```
 idle → running → transitioning → done
 ```
-- Polling starts on `start()`, stops on `stop()` or when state reaches `done`.
-- Emits `status`, `reading`, and `error` events consumed by `server.js`.
-- Transition waits for current track to finish (polls `getRemainingSeconds()`).
+- `useReducer` for state; polling interval held in a `useRef` so it survives re-renders.
+- Each tick: Owlet read → Spotify playback read → either transition (HR below threshold: wait out remaining track seconds, start white noise) or keep music alive (restart Chopin when `remaining_seconds < RESTART_THRESHOLD_SECONDS` or nothing playing).
+- `monitorOnly` flag disables all playback control.
 
-### Server-Sent Events
-`server.js` maintains an array of SSE response objects (`sseClients`). All Owlet readings and state changes are broadcast via `broadcast()`. The web UI connects to `/api/events` and updates the DOM in real time. No WebSocket needed.
+### Spotify
+- `spotifyAuth.ts`: OAuth authorization-code + PKCE via `expo-auth-session`; tokens persisted in `expo-secure-store`. Redirect scheme `babu://auth`.
+- `spotifyApi.ts`: direct `fetch` against the Web API — no SDK. Every function short-circuits on `MOCK_TOKEN`.
+- Owlet credentials and region are also stored in `expo-secure-store` after first successful start.
 
-### Spotify token persistence
-- Python (spotipy): caches OAuth token automatically in `.cache` file.
-- Node.js: persists token to `.spotify-token.json`. Check for this file if auth breaks.
-
----
-
-## Environment variables
-
-| Variable | Required | Notes |
-|---|---|---|
-| `OWLET_EMAIL` | Yes | Owlet account email |
-| `OWLET_PWD` | Yes | Owlet account password |
-| `OWLET_REGION` | No | `europe` or `world` (default: `world`) |
-| `SPOTIFY_CLIENT_ID` | Yes | Spotify Developer app client ID |
-| `SPOTIFY_CLIENT_SECRET` | Yes | Spotify Developer app client secret |
-| `SPOTIFY_DEVICE_NAME` | Yes (Node.js) | Spotify device name to target (e.g. `iphone`) |
-| `PORT` | No | HTTP server port (default: 3000) |
+### Configuration
+`app/app.config.js` loads `app/.env` and exposes `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, and `MOCK_MODE` via `expo.extra`. No other env vars exist; Owlet credentials are entered in-app at runtime.
 
 ---
 
@@ -124,50 +119,28 @@ This project follows strict TDD. For every unit of code:
 3. **Write the minimum implementation to make it pass**
 4. **Refactor** — clean up without changing behaviour; tests stay green throughout
 
-Never write implementation code that does not have a corresponding test written first. If you are asked to implement a feature, write the test file first, confirm it fails (`npm test -- <file> --no-coverage`), then implement.
+Never write implementation code that does not have a corresponding test written first. If you are asked to implement a feature, write the test file first, confirm it fails (`cd app && npm test -- <file> --no-coverage`), then implement.
 
 ---
 
 ## Common tasks
 
-### Change the sleep BPM threshold
-Edit `HR_THRESHOLD` in both `lib/routine.js` and `main.py`.
+### Change the sleep BPM threshold / playlists / poll interval
+Edit `app/src/lib/constants.ts` (single source of truth — no duplicates anywhere).
 
-### Change playlists
-Edit `CHOPIN_PLAYLIST` / `WHITENOISE_PLAYLIST` in `lib/routine.js` and the equivalent URIs in `main.py`.
+### Debug the Spotify auth
+Tokens live in `expo-secure-store` under the keys used in `spotifyAuth.ts`. In mock mode (`MOCK_MODE=1`) the OAuth flow is skipped entirely.
 
-### Debug Owlet connection
-Run a one-shot read in Python:
-```python
-from lib.owlet import Owlet
-import os, asyncio
-owlet = Owlet(os.environ["OWLET_EMAIL"], os.environ["OWLET_PWD"], region="europe")
-print(owlet.read())
-```
-
-Or hit the Node.js endpoint:
-```bash
-curl http://localhost:3000/api/owlet/reading
-```
-
-### Debug Spotify auth (Node.js)
-Delete `.spotify-token.json` and re-authenticate via the UI or `GET /auth/spotify`.
-
-### Sync the Python and JS Owlet clients
-`lib/owlet.py` and `lib/owlet.js` are parallel implementations. If you fix a bug in the auth flow, apply it to both files.
+### CI
+`.github/workflows/ci.yml` runs `npm run test:coverage` in `app/` on every push/PR and rewrites the coverage badge in `README.md` on pushes to `main` (commits with `[skip ci]`). Keep the badge URL format `https://img.shields.io/badge/coverage-...` intact — the workflow updates it with `sed`.
 
 ---
 
 ## Dependencies
 
-**Python** (managed via Poetry):
-- `pyowletapi` — Owlet API wrapper (partially used for reference; the custom `Owlet` class in `lib/owlet.py` does its own auth)
-- `spotipy` — Spotify Web API client
-- `requests` — HTTP
-
-**Node.js**:
-- `express` — HTTP server
-- `spotify-web-api-node` — Spotify Web API client
-- `dotenv` — env var loading
+- `expo` + `expo-auth-session`, `expo-secure-store`, `expo-web-browser`, `expo-constants`
+- `@react-navigation/native` + `native-stack`
+- `@react-native-picker/picker`
+- Jest via `jest-expo`, `@testing-library/react-native`, `jest-fetch-mock`
 
 Spotify Premium is required. The Owlet integration uses an unofficial API and may break on Owlet backend updates.
