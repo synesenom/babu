@@ -31,10 +31,9 @@ app/
 ├── app.json                      App metadata (name "Babu", package, scheme "babu://")
 ├── jest.config.js, jest.setup.ts Jest (jest-expo preset)
 └── package.json
-PLAN.md                           Migration plan (historical, all steps complete)
 ```
 
-The old Python CLI and Node.js web server were removed after the React Native migration (see `PLAN.md` step 15).
+The old Python CLI and Node.js web server were removed after the React Native migration; only the app remains.
 
 ---
 
