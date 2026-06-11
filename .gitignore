@@ -1,9 +1,5 @@
-__pycache__
 .DS_Store
-.cache
 .env
-.venv
 node_modules
 .idea/
 app/android/
-android/
