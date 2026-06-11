@@ -279,7 +279,7 @@ describe('refreshAccessToken()', () => {
       { status: 200 },
     );
 
-    const tokens = await refreshAccessToken('client-id', 'client-secret', 'old-refresh-token');
+    const tokens = await refreshAccessToken('client-id', 'old-refresh-token');
 
     expect(tokens.access_token).toBe('new-access-token');
     expect(tokens.refresh_token).toBe('new-refresh-token');
@@ -292,10 +292,27 @@ describe('refreshAccessToken()', () => {
     expect(options?.body).toContain('refresh_token=old-refresh-token');
   });
 
+  it('sends client_id in the body and no client secret (public PKCE client)', async () => {
+    fetchMock.mockResponseOnce(
+      JSON.stringify({ access_token: 'a', refresh_token: 'r', expires_in: 3600 }),
+      { status: 200 },
+    );
+
+    await refreshAccessToken('client-id', 'old-refresh-token');
+
+    const [, options] = fetchMock.mock.calls[0];
+    expect(options?.body).toContain('client_id=client-id');
+    // No client secret must ever be sent: no Basic auth header.
+    const headers = (options?.headers ?? {}) as Record<string, string>;
+    const headerKeys = Object.keys(headers).map((k) => k.toLowerCase());
+    expect(headerKeys).not.toContain('authorization');
+    expect(options?.body).not.toContain('client_secret');
+  });
+
   it('throws SpotifyError on 400 (invalid refresh token)', async () => {
     fetchMock.mockResponse('Bad Request', { status: 400 });
 
-    const err = await refreshAccessToken('client-id', 'client-secret', 'bad-refresh-token').catch((e) => e);
+    const err = await refreshAccessToken('client-id', 'bad-refresh-token').catch((e) => e);
     expect(err).toBeInstanceOf(SpotifyError);
     expect(err.status).toBe(400);
   });

@@ -7,6 +7,13 @@ import type { SpotifyTokens } from './types';
 
 const SECURE_KEY = 'babu_spotify_tokens';
 
+// Keep secrets bound to this device and only readable while the device is
+// unlocked. WHEN_UNLOCKED_THIS_DEVICE_ONLY items are never migrated to a new
+// device via backup/restore.
+const SECURE_OPTS: SecureStore.SecureStoreOptions = {
+  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+};
+
 // Spotify Developer dashboard: add `babu://auth` and `exp://localhost:8081/--/` as redirect URIs
 const DISCOVERY: AuthSession.DiscoveryDocument = {
   authorizationEndpoint: 'https://accounts.spotify.com/authorize',
@@ -24,21 +31,21 @@ export async function loadStoredTokens(): Promise<SpotifyTokens | null> {
 }
 
 export async function saveTokens(tokens: SpotifyTokens): Promise<void> {
-  await SecureStore.setItemAsync(SECURE_KEY, JSON.stringify(tokens));
+  await SecureStore.setItemAsync(SECURE_KEY, JSON.stringify(tokens), SECURE_OPTS);
 }
 
 export async function clearTokens(): Promise<void> {
   await SecureStore.deleteItemAsync(SECURE_KEY);
 }
 
-export async function getValidToken(clientId: string, clientSecret: string): Promise<string | null> {
+export async function getValidToken(clientId: string): Promise<string | null> {
   const tokens = await loadStoredTokens();
   if (!tokens) return null;
   if (Date.now() < tokens.expires_at - 60_000) {
     return tokens.access_token;
   }
   try {
-    const refreshed = await refreshAccessToken(clientId, clientSecret, tokens.refresh_token);
+    const refreshed = await refreshAccessToken(clientId, tokens.refresh_token);
     await saveTokens(refreshed);
     return refreshed.access_token;
   } catch {
@@ -48,7 +55,6 @@ export async function getValidToken(clientId: string, clientSecret: string): Pro
 
 export function useSpotifyAuth(
   clientId: string,
-  clientSecret: string,
 ): {
   tokens: SpotifyTokens | null;
   promptAsync: () => Promise<void>;

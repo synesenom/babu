@@ -38,7 +38,7 @@ A **Monitor only** switch on the setup screen disables all playback control: the
 2. Click **Create app** and fill in any name.
 3. Under **Redirect URIs** add: `babu://auth` (and `exp://localhost:8081/--/` for emulator/dev builds).
 4. Under **APIs used** check **Web API**, then save.
-5. Copy the **Client ID** and **Client Secret**.
+5. Copy the **Client ID**. (No client secret is needed — the app authenticates as a public PKCE client.)
 6. Go to **Users and Access** and add your Spotify account email (required while the app is in Development mode).
 
 ### 2. Install dependencies
@@ -54,10 +54,9 @@ Create `app/.env` (see `app/.env.example`):
 
 ```env
 SPOTIFY_CLIENT_ID=your_spotify_client_id
-SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
 ```
 
-These are baked into the build by `app/app.config.js`. Owlet credentials are **not** configured here — they are entered in the app at runtime and stored on-device with `expo-secure-store`.
+This is baked into the build by `app/app.config.js`. No client secret is used — the app is a public OAuth client and authenticates with PKCE, so there is no secret to leak in the shipped APK. Owlet credentials are **not** configured here — they are entered in the app at runtime and stored on-device with `expo-secure-store`.
 
 ---
 

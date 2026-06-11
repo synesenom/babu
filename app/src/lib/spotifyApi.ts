@@ -109,21 +109,22 @@ export async function findDeviceByName(token: string, nameSubstring: string): Pr
   return match ? match.id : null;
 }
 
+// Public PKCE client: the refresh request is authenticated with the public
+// client_id only. No client secret is involved — shipping one inside the app
+// would expose it, since anything in the bundle is extractable from the APK.
 export async function refreshAccessToken(
   clientId: string,
-  clientSecret: string,
   refreshToken: string,
 ): Promise<SpotifyTokens> {
-  const credentials = btoa(`${clientId}:${clientSecret}`);
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
+    client_id: clientId,
   });
 
   const res = await fetch('https://accounts.spotify.com/api/token', {
     method: 'POST',
     headers: {
-      Authorization: `Basic ${credentials}`,
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: body.toString(),

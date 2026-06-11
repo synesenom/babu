@@ -105,7 +105,7 @@ idle → running → transitioning → done
 - Owlet credentials and region are also stored in `expo-secure-store` after first successful start.
 
 ### Configuration
-`app/app.config.js` loads `app/.env` and exposes `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, and `MOCK_MODE` via `expo.extra`. No other env vars exist; Owlet credentials are entered in-app at runtime.
+`app/app.config.js` loads `app/.env` and exposes `SPOTIFY_CLIENT_ID` and `MOCK_MODE` via `expo.extra`. No other env vars exist; Owlet credentials are entered in-app at runtime. Spotify auth is a public PKCE client — no client secret is bundled (anything in `expo.extra` is embedded in the APK and extractable, so a secret there would be effectively public).
 
 ---
 

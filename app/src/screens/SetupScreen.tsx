@@ -26,13 +26,16 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Setup'>;
 
 const extra = Constants.expoConfig?.extra as {
   spotifyClientId?: string;
-  spotifyClientSecret?: string;
   mockMode?: boolean;
 } | undefined;
 
 const CLIENT_ID = extra?.spotifyClientId ?? '';
-const CLIENT_SECRET = extra?.spotifyClientSecret ?? '';
 const MOCK_MODE = extra?.mockMode ?? false;
+
+// Bind on-device credentials to this device, readable only while unlocked.
+const SECURE_OPTS: SecureStore.SecureStoreOptions = {
+  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+};
 
 const MOCK_SPOTIFY_TOKENS: SpotifyTokens = {
   access_token: MOCK_TOKEN,
@@ -52,7 +55,7 @@ export default function SetupScreen({ navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [storedTokens, setStoredTokens] = useState<SpotifyTokens | null>(null);
 
-  const { tokens, promptAsync, isLoading: authLoading } = useSpotifyAuth(CLIENT_ID, CLIENT_SECRET);
+  const { tokens, promptAsync, isLoading: authLoading } = useSpotifyAuth(CLIENT_ID);
 
   useEffect(() => {
     (async () => {
@@ -134,9 +137,9 @@ export default function SetupScreen({ navigation }: Props) {
           monitorOnly,
         });
       } else {
-        await SecureStore.setItemAsync('owlet_email', email);
-        await SecureStore.setItemAsync('owlet_password', password);
-        await SecureStore.setItemAsync('owlet_region', region);
+        await SecureStore.setItemAsync('owlet_email', email, SECURE_OPTS);
+        await SecureStore.setItemAsync('owlet_password', password, SECURE_OPTS);
+        await SecureStore.setItemAsync('owlet_region', region, SECURE_OPTS);
         const owlet = await Owlet.create(email, password, region);
         navigation.navigate('Monitoring', { owlet, tokens: effectiveTokens, deviceName, monitorOnly });
       }

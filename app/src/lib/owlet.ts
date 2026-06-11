@@ -31,11 +31,11 @@ async function firebaseSignIn(email: string, password: string, cfg: RegionConfig
     signal: makeSignal(15000),
   });
   if (!resp.ok) {
-    throw new OwletError(`Firebase sign-in failed (${resp.status}): ${await resp.text()}`);
+    throw new OwletError(`Firebase sign-in failed (${resp.status})`);
   }
   const data = await resp.json();
   if (!data.idToken) {
-    throw new OwletError(`Firebase sign-in: unexpected response: ${JSON.stringify(data)}`);
+    throw new OwletError('Firebase sign-in: unexpected response (no idToken)');
   }
   return data.idToken as string;
 }
@@ -46,11 +46,11 @@ async function getMiniToken(idToken: string, cfg: RegionConfig): Promise<string>
     signal: makeSignal(15000),
   });
   if (!resp.ok) {
-    throw new OwletError(`SSO mini-token failed (${resp.status}): ${await resp.text()}`);
+    throw new OwletError(`SSO mini-token failed (${resp.status})`);
   }
   const data = await resp.json();
   if (!data.mini_token) {
-    throw new OwletError(`SSO mini-token: unexpected response: ${JSON.stringify(data)}`);
+    throw new OwletError('SSO mini-token: unexpected response (no mini_token)');
   }
   return data.mini_token as string;
 }
@@ -68,11 +68,11 @@ async function aylaSignIn(miniToken: string, cfg: RegionConfig): Promise<{ token
     signal: makeSignal(15000),
   });
   if (resp.status !== 200 && resp.status !== 201) {
-    throw new OwletError(`Ayla sign-in failed (${resp.status}): ${await resp.text()}`);
+    throw new OwletError(`Ayla sign-in failed (${resp.status})`);
   }
   const data = await resp.json();
   if (!data.access_token) {
-    throw new OwletError(`Ayla sign-in: no access_token in response: ${JSON.stringify(data)}`);
+    throw new OwletError('Ayla sign-in: unexpected response (no access_token)');
   }
   return { token: data.access_token as string, ttl: parseInt(data.expires_in ?? '86400', 10) };
 }
@@ -101,7 +101,7 @@ async function getDsns(token: string, cfg: RegionConfig): Promise<string[]> {
     signal: makeSignal(15000),
   });
   if (!resp.ok) {
-    throw new OwletError(`Device list failed (${resp.status}): ${await resp.text()}`);
+    throw new OwletError(`Device list failed (${resp.status})`);
   }
   const devices = await resp.json();
   if (!devices || devices.length === 0) {
@@ -121,7 +121,7 @@ async function activate(dsn: string, token: string, cfg: RegionConfig): Promise<
     },
   );
   if (resp.status !== 200 && resp.status !== 201) {
-    throw new OwletError(`APP_ACTIVE post failed (${resp.status}): ${await resp.text()}`);
+    throw new OwletError(`APP_ACTIVE post failed (${resp.status})`);
   }
 }
 
@@ -135,7 +135,7 @@ async function getProps(
     signal: makeSignal(15000),
   });
   if (!resp.ok) {
-    throw new OwletError(`Property fetch failed (${resp.status}): ${await resp.text()}`);
+    throw new OwletError(`Property fetch failed (${resp.status})`);
   }
   const data = await resp.json();
   const props: Record<string, unknown> = {};
