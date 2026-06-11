@@ -1,7 +1,7 @@
-export const HR_THRESHOLD = 110;
+export const HR_THRESHOLD = 120;
 export const MOCK_TOKEN = '__babu_mock__';
-export const POLL_INTERVAL_MS = 10_000;
-export const RESTART_THRESHOLD_SECONDS = 10;
+export const POLL_INTERVAL_MS = 5_000;
+export const RESTART_THRESHOLD_SECONDS = 5;
 
 export const CHOPIN_PLAYLIST = 'spotify:playlist:5MKaz5wxcypYQLklyx34J2';
 export const WHITENOISE_PLAYLIST = 'spotify:playlist:4Lj9ZugyG3SNEA9XAxGVwx';
