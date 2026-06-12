@@ -145,7 +145,7 @@ Both phone and computer must be on the same Wi-Fi network.
 - **Owlet email / password** — your Owlet account credentials. Saved on-device after the first successful start.
 - **Region** — `world` (North America) or `europe` (EU Ayla endpoint).
 - **Connect Spotify** — opens the Spotify OAuth flow in a browser (PKCE). Tokens are stored securely on-device.
-- **Device** — the Spotify device name to control. To find it: open Spotify on the target phone/speaker → tap the **device icon** at the bottom of the player — use the exact name listed there.
+- **Device** — a substring of the Spotify device name to control (case-insensitive). The app calls the Spotify API, lists your active devices, and picks the first one whose name contains what you typed. For example, typing `iPhone` will match `Enys's iPhone`. To see the device names available: open Spotify on the target phone or speaker → tap the **device icon** (cast icon) at the bottom of the Now Playing bar — every listed device name is a valid value. If no active device matches when a routine tick fires, playback is skipped silently until a match appears.
 - **Monitor only** — show vitals without touching playback.
 
 ### Monitoring screen
