@@ -9,6 +9,7 @@ import {
 } from '../lib/constants';
 import type { Owlet } from '../lib/owlet';
 import { getCurrentPlayback, findDeviceByName, startPlaylist } from '../lib/spotifyApi';
+import { getValidToken } from '../lib/spotifyAuth';
 
 type Action =
   | { type: 'START' }
@@ -53,6 +54,8 @@ export function useRoutine(
   deviceName: string,
   pollIntervalMs: number = POLL_INTERVAL_MS,
   monitorOnly: boolean = false,
+  clientId: string = '',
+  clientSecret: string = '',
 ): {
   state: RoutineState;
   start: () => void;
@@ -75,7 +78,17 @@ export function useRoutine(
       const reading = await owlet.read();
       dispatch({ type: 'READING', payload: reading });
 
-      const playback = await getCurrentPlayback(tokens.access_token);
+      // Spotify access tokens expire after ~1 hour; an overnight monitor runs far
+      // longer than that. Refresh before every Spotify call so a stale token never
+      // reaches the API (the cause of the daily 403). Falls back to the passed-in
+      // token when no client credentials are available (e.g. mock mode).
+      let accessToken = tokens.access_token;
+      if (clientId) {
+        const valid = await getValidToken(clientId, clientSecret);
+        if (valid) accessToken = valid;
+      }
+
+      const playback = await getCurrentPlayback(accessToken);
       dispatch({ type: 'NOW_PLAYING', payload: playback });
 
       if (!monitorOnly) {
@@ -88,17 +101,17 @@ export function useRoutine(
             await new Promise<void>((resolve) => setTimeout(resolve, remainingSeconds * 1000));
           }
 
-          const deviceId = await findDeviceByName(tokens.access_token, deviceName);
+          const deviceId = await findDeviceByName(accessToken, deviceName);
           if (deviceId) {
-            await startPlaylist(tokens.access_token, WHITENOISE_PLAYLIST, deviceId);
+            await startPlaylist(accessToken, WHITENOISE_PLAYLIST, deviceId);
           }
           dispatch({ type: 'DONE' });
         } else {
           const remainingSeconds = playback?.remaining_seconds ?? null;
           if (remainingSeconds === null || remainingSeconds < RESTART_THRESHOLD_SECONDS) {
-            const deviceId = await findDeviceByName(tokens.access_token, deviceName);
+            const deviceId = await findDeviceByName(accessToken, deviceName);
             if (deviceId) {
-              await startPlaylist(tokens.access_token, CHOPIN_PLAYLIST, deviceId);
+              await startPlaylist(accessToken, CHOPIN_PLAYLIST, deviceId);
             }
           }
         }
@@ -106,7 +119,7 @@ export function useRoutine(
     } catch (err) {
       dispatch({ type: 'ERROR', payload: err instanceof Error ? err.message : String(err) });
     }
-  }, [owlet, tokens, deviceName, monitorOnly, clearPolling]);
+  }, [owlet, tokens, deviceName, monitorOnly, clearPolling, clientId, clientSecret]);
 
   const start = useCallback(() => {
     dispatch({ type: 'START' });

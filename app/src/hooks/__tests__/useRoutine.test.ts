@@ -1,16 +1,19 @@
 import { renderHook, act } from '@testing-library/react-native';
 import { useRoutine } from '../useRoutine';
 import * as spotifyApi from '../../lib/spotifyApi';
+import * as spotifyAuth from '../../lib/spotifyAuth';
 import { POLL_INTERVAL_MS, WHITENOISE_PLAYLIST } from '../../lib/constants';
 import type { OwletReading, SpotifyTokens, SpotifyPlayback } from '../../lib/types';
 import type { Owlet } from '../../lib/owlet';
 
 jest.mock('../../lib/owlet');
 jest.mock('../../lib/spotifyApi');
+jest.mock('../../lib/spotifyAuth');
 
 const mockGetCurrentPlayback = spotifyApi.getCurrentPlayback as jest.Mock;
 const mockFindDeviceByName = spotifyApi.findDeviceByName as jest.Mock;
 const mockStartPlaylist = spotifyApi.startPlaylist as jest.Mock;
+const mockGetValidToken = spotifyAuth.getValidToken as jest.Mock;
 
 const DEFAULT_READING: OwletReading = {
   heart_rate: 120,
@@ -72,6 +75,7 @@ beforeEach(() => {
   mockGetCurrentPlayback.mockResolvedValue(null);
   mockFindDeviceByName.mockResolvedValue('dev1');
   mockStartPlaylist.mockResolvedValue(true);
+  mockGetValidToken.mockResolvedValue('refreshed-access-token');
 });
 
 afterEach(() => {
@@ -292,4 +296,82 @@ it('monitorOnly: vitals and nowPlaying are still updated each tick', async () =>
   await advanceInterval();
   expect(result.current.state.lastReading?.heart_rate).toBe(85);
   expect(result.current.state.nowPlaying?.track_name).toBe('Nocturne Op. 15 No. 2');
+});
+
+// ---------------------------------------------------------------------------
+// 10. Token refresh — the access token is refreshed each tick so an expired
+//     token never reaches the Spotify API (the daily 403 bug).
+// ---------------------------------------------------------------------------
+
+it('refreshes the access token via getValidToken each tick and uses it for Spotify calls', async () => {
+  mockGetValidToken.mockResolvedValue('fresh-token');
+  const owlet = makeOwlet([{ heart_rate: 120 }]);
+  mockGetCurrentPlayback.mockResolvedValue(MOCK_PLAYBACK);
+
+  const { result } = await renderHook(() =>
+    useRoutine(owlet, MOCK_TOKENS, 'iphone', POLL_INTERVAL_MS, false, 'client-id', 'client-secret'),
+  );
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+
+  expect(mockGetValidToken).toHaveBeenCalledWith('client-id', 'client-secret');
+  expect(mockGetCurrentPlayback).toHaveBeenCalledWith('fresh-token');
+});
+
+it('uses the refreshed token when starting the white-noise playlist after sleep detection', async () => {
+  mockGetValidToken.mockResolvedValue('fresh-token');
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  mockGetCurrentPlayback.mockResolvedValue({ ...MOCK_PLAYBACK, remaining_seconds: 0, remaining_ms: 0 });
+
+  const { result } = await renderHook(() =>
+    useRoutine(owlet, MOCK_TOKENS, 'iphone', POLL_INTERVAL_MS, false, 'client-id', 'client-secret'),
+  );
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+
+  expect(result.current.state.status).toBe('done');
+  expect(mockFindDeviceByName).toHaveBeenCalledWith('fresh-token', 'iphone');
+  expect(mockStartPlaylist).toHaveBeenCalledWith('fresh-token', WHITENOISE_PLAYLIST, 'dev1');
+});
+
+it('falls back to the passed token when no client credentials are provided', async () => {
+  const owlet = makeOwlet([{ heart_rate: 120 }]);
+  mockGetCurrentPlayback.mockResolvedValue(MOCK_PLAYBACK);
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+
+  expect(mockGetValidToken).not.toHaveBeenCalled();
+  expect(mockGetCurrentPlayback).toHaveBeenCalledWith(MOCK_TOKENS.access_token);
+});
+
+it('falls back to the passed token when the refresh fails (getValidToken returns null)', async () => {
+  mockGetValidToken.mockResolvedValue(null);
+  const owlet = makeOwlet([{ heart_rate: 120 }]);
+  mockGetCurrentPlayback.mockResolvedValue(MOCK_PLAYBACK);
+
+  const { result } = await renderHook(() =>
+    useRoutine(owlet, MOCK_TOKENS, 'iphone', POLL_INTERVAL_MS, false, 'client-id', 'client-secret'),
+  );
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+
+  expect(mockGetCurrentPlayback).toHaveBeenCalledWith(MOCK_TOKENS.access_token);
 });

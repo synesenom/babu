@@ -7,12 +7,21 @@ import {
   ScrollView,
   SafeAreaView,
 } from 'react-native';
+import Constants from 'expo-constants';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { useRoutine } from '../hooks/useRoutine';
 import type { RoutineStatus } from '../lib/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Monitoring'>;
+
+const extra = Constants.expoConfig?.extra as {
+  spotifyClientId?: string;
+  spotifyClientSecret?: string;
+} | undefined;
+
+const CLIENT_ID = extra?.spotifyClientId ?? '';
+const CLIENT_SECRET = extra?.spotifyClientSecret ?? '';
 
 const STATUS_COLORS: Record<RoutineStatus, string> = {
   idle: '#8b949e',
@@ -23,7 +32,15 @@ const STATUS_COLORS: Record<RoutineStatus, string> = {
 
 export default function MonitoringScreen({ route, navigation }: Props) {
   const { owlet, tokens, deviceName, pollIntervalMs, monitorOnly } = route.params;
-  const { state, start, stop } = useRoutine(owlet, tokens, deviceName, pollIntervalMs, monitorOnly);
+  const { state, start, stop } = useRoutine(
+    owlet,
+    tokens,
+    deviceName,
+    pollIntervalMs,
+    monitorOnly,
+    CLIENT_ID,
+    CLIENT_SECRET,
+  );
   const [errorDismissed, setErrorDismissed] = useState(false);
 
   useEffect(() => {
