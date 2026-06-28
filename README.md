@@ -54,10 +54,9 @@ Create `app/.env` (see `app/.env.example`):
 
 ```env
 SPOTIFY_CLIENT_ID=your_spotify_client_id
-SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
 ```
 
-These are baked into the build by `app/app.config.js`. Owlet credentials are **not** configured here — they are entered in the app at runtime and stored on-device with `expo-secure-store`.
+The client ID is baked into the build by `app/app.config.js`. There is no client secret — the app uses Spotify's PKCE public-client flow, so nothing sensitive is bundled into the distributed APK. Owlet credentials are **not** configured here — they are entered in the app at runtime and stored on-device with `expo-secure-store`.
 
 ---
 

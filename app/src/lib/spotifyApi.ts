@@ -111,19 +111,20 @@ export async function findDeviceByName(token: string, nameSubstring: string): Pr
 
 export async function refreshAccessToken(
   clientId: string,
-  clientSecret: string,
   refreshToken: string,
 ): Promise<SpotifyTokens> {
-  const credentials = btoa(`${clientId}:${clientSecret}`);
+  // PKCE / public-client refresh: the client_id goes in the body and there is no
+  // client secret. The app ships its bundle to phones, so a secret could not be
+  // kept private anyway — see Spotify's "refreshing tokens" PKCE guidance.
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
+    client_id: clientId,
   });
 
   const res = await fetch('https://accounts.spotify.com/api/token', {
     method: 'POST',
     headers: {
-      Authorization: `Basic ${credentials}`,
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: body.toString(),

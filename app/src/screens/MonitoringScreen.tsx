@@ -17,11 +17,9 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Monitoring'>;
 
 const extra = Constants.expoConfig?.extra as {
   spotifyClientId?: string;
-  spotifyClientSecret?: string;
 } | undefined;
 
 const CLIENT_ID = extra?.spotifyClientId ?? '';
-const CLIENT_SECRET = extra?.spotifyClientSecret ?? '';
 
 const STATUS_COLORS: Record<RoutineStatus, string> = {
   idle: '#8b949e',
@@ -39,7 +37,6 @@ export default function MonitoringScreen({ route, navigation }: Props) {
     pollIntervalMs,
     monitorOnly,
     CLIENT_ID,
-    CLIENT_SECRET,
   );
   const [errorDismissed, setErrorDismissed] = useState(false);
 

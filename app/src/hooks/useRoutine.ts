@@ -55,7 +55,6 @@ export function useRoutine(
   pollIntervalMs: number = POLL_INTERVAL_MS,
   monitorOnly: boolean = false,
   clientId: string = '',
-  clientSecret: string = '',
 ): {
   state: RoutineState;
   start: () => void;
@@ -84,7 +83,7 @@ export function useRoutine(
       // token when no client credentials are available (e.g. mock mode).
       let accessToken = tokens.access_token;
       if (clientId) {
-        const valid = await getValidToken(clientId, clientSecret);
+        const valid = await getValidToken(clientId);
         if (valid) accessToken = valid;
       }
 
@@ -119,7 +118,7 @@ export function useRoutine(
     } catch (err) {
       dispatch({ type: 'ERROR', payload: err instanceof Error ? err.message : String(err) });
     }
-  }, [owlet, tokens, deviceName, monitorOnly, clearPolling, clientId, clientSecret]);
+  }, [owlet, tokens, deviceName, monitorOnly, clearPolling, clientId]);
 
   const start = useCallback(() => {
     dispatch({ type: 'START' });

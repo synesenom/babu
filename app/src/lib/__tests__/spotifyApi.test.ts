@@ -279,7 +279,7 @@ describe('refreshAccessToken()', () => {
       { status: 200 },
     );
 
-    const tokens = await refreshAccessToken('client-id', 'client-secret', 'old-refresh-token');
+    const tokens = await refreshAccessToken('client-id', 'old-refresh-token');
 
     expect(tokens.access_token).toBe('new-access-token');
     expect(tokens.refresh_token).toBe('new-refresh-token');
@@ -290,12 +290,15 @@ describe('refreshAccessToken()', () => {
     expect(options?.method).toBe('POST');
     expect(options?.body).toContain('grant_type=refresh_token');
     expect(options?.body).toContain('refresh_token=old-refresh-token');
+    // PKCE public-client refresh: client_id goes in the body, no client secret.
+    expect(options?.body).toContain('client_id=client-id');
+    expect((options?.headers as Record<string, string>)?.Authorization).toBeUndefined();
   });
 
   it('throws SpotifyError on 400 (invalid refresh token)', async () => {
     fetchMock.mockResponse('Bad Request', { status: 400 });
 
-    const err = await refreshAccessToken('client-id', 'client-secret', 'bad-refresh-token').catch((e) => e);
+    const err = await refreshAccessToken('client-id', 'bad-refresh-token').catch((e) => e);
     expect(err).toBeInstanceOf(SpotifyError);
     expect(err.status).toBe(400);
   });
