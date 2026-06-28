@@ -62,6 +62,13 @@ export function useRoutine(
 } {
   const [state, dispatch] = useReducer(reducer, initialState);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Guards against overlapping ticks: the Owlet auth chain + Spotify calls can
+  // take longer than the poll interval, so setInterval would otherwise fire a
+  // second tick while the first is still running. That race let a stale tick
+  // restart Chopin after a transition had already begun, so the routine showed
+  // "transitioning" but never switched to white noise. While a tick is in
+  // flight (including the remaining-track wait), later ticks are skipped.
+  const tickingRef = useRef(false);
 
   const clearPolling = useCallback(() => {
     if (intervalRef.current !== null) {
@@ -72,6 +79,8 @@ export function useRoutine(
 
   const tick = useCallback(async () => {
     if (!owlet || !tokens) return;
+    if (tickingRef.current) return;
+    tickingRef.current = true;
 
     try {
       const reading = await owlet.read();
@@ -117,6 +126,8 @@ export function useRoutine(
       }
     } catch (err) {
       dispatch({ type: 'ERROR', payload: err instanceof Error ? err.message : String(err) });
+    } finally {
+      tickingRef.current = false;
     }
   }, [owlet, tokens, deviceName, monitorOnly, clearPolling, clientId]);
 

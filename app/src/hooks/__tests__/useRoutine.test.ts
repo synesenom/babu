@@ -2,7 +2,7 @@ import { renderHook, act } from '@testing-library/react-native';
 import { useRoutine } from '../useRoutine';
 import * as spotifyApi from '../../lib/spotifyApi';
 import * as spotifyAuth from '../../lib/spotifyAuth';
-import { POLL_INTERVAL_MS, WHITENOISE_PLAYLIST } from '../../lib/constants';
+import { POLL_INTERVAL_MS, WHITENOISE_PLAYLIST, CHOPIN_PLAYLIST } from '../../lib/constants';
 import type { OwletReading, SpotifyTokens, SpotifyPlayback } from '../../lib/types';
 import type { Owlet } from '../../lib/owlet';
 
@@ -374,4 +374,85 @@ it('falls back to the passed token when the refresh fails (getValidToken returns
   await advanceInterval();
 
   expect(mockGetCurrentPlayback).toHaveBeenCalledWith(MOCK_TOKENS.access_token);
+});
+
+// ---------------------------------------------------------------------------
+// 11. Re-entrancy — ticks must not overlap. The Owlet auth chain + Spotify
+//     calls can take longer than the poll interval; without a guard, a second
+//     tick fires while the first is still in flight, racing the transition
+//     against the Chopin keep-alive branch (transition shown, Chopin restarted,
+//     never switches to white noise).
+// ---------------------------------------------------------------------------
+
+it('skips a tick while the previous tick is still in flight (no overlapping reads)', async () => {
+  let resolveRead!: (r: OwletReading) => void;
+  const read = jest
+    .fn()
+    .mockImplementationOnce(
+      () => new Promise<OwletReading>((res) => { resolveRead = res; }),
+    )
+    .mockResolvedValue({ ...DEFAULT_READING, heart_rate: 120 });
+  const owlet = { read } as unknown as Owlet;
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  // First interval: tick 1 fires and blocks on the pending read.
+  await advanceInterval();
+  // Second interval: tick 2 fires while tick 1 is still awaiting — must be skipped.
+  await advanceInterval();
+
+  expect(read).toHaveBeenCalledTimes(1);
+
+  // Let tick 1 complete so the guard is released and no promises dangle.
+  await act(async () => {
+    resolveRead({ ...DEFAULT_READING, heart_rate: 120 });
+    await new Promise<void>((r) => setImmediate(r));
+  });
+});
+
+it('does not restart Chopin once a transition is in progress', async () => {
+  // tick 1's read resolves low (transition); tick 2 would read high (keep-alive)
+  // but must never run because tick 1 holds the re-entrancy guard through the
+  // remaining-track wait.
+  let resolveRead!: (r: OwletReading) => void;
+  const read = jest
+    .fn()
+    .mockImplementationOnce(
+      () => new Promise<OwletReading>((res) => { resolveRead = res; }),
+    )
+    .mockResolvedValue({ ...DEFAULT_READING, heart_rate: 130 });
+  const owlet = { read } as unknown as Owlet;
+  mockGetCurrentPlayback.mockResolvedValue({
+    ...MOCK_PLAYBACK,
+    remaining_seconds: 5,
+    remaining_ms: 5000,
+  });
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval(); // tick 1 fires, blocks on pending low read
+  await advanceInterval(); // tick 2 fires while tick 1 in flight — must be skipped
+
+  // Release tick 1's low reading → it should transition and start white noise.
+  await act(async () => {
+    resolveRead({ ...DEFAULT_READING, heart_rate: 90 });
+    await new Promise<void>((r) => setImmediate(r));
+  });
+  await advanceInterval(5000); // wait out the remaining track
+
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(mockStartPlaylist).toHaveBeenCalledWith(MOCK_TOKENS.access_token, WHITENOISE_PLAYLIST, 'dev1');
+  expect(mockStartPlaylist).not.toHaveBeenCalledWith(
+    expect.anything(),
+    CHOPIN_PLAYLIST,
+    expect.anything(),
+  );
 });
