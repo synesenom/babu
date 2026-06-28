@@ -38,7 +38,9 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-          cache: gradle
+          # No `cache: gradle` here: the android/ project is generated later by
+          # `expo prebuild`, so at this point there are no Gradle files to hash
+          # for a cache key and the cache step would fail.
 
       - uses: android-actions/setup-android@v3
 
