@@ -309,7 +309,7 @@ it('refreshes the access token via getValidToken each tick and uses it for Spoti
   mockGetCurrentPlayback.mockResolvedValue(MOCK_PLAYBACK);
 
   const { result } = await renderHook(() =>
-    useRoutine(owlet, MOCK_TOKENS, 'iphone', POLL_INTERVAL_MS, false, 'client-id', 'client-secret'),
+    useRoutine(owlet, MOCK_TOKENS, 'iphone', POLL_INTERVAL_MS, false, 'client-id'),
   );
 
   await act(async () => {
@@ -318,7 +318,7 @@ it('refreshes the access token via getValidToken each tick and uses it for Spoti
 
   await advanceInterval();
 
-  expect(mockGetValidToken).toHaveBeenCalledWith('client-id', 'client-secret');
+  expect(mockGetValidToken).toHaveBeenCalledWith('client-id');
   expect(mockGetCurrentPlayback).toHaveBeenCalledWith('fresh-token');
 });
 
@@ -328,7 +328,7 @@ it('uses the refreshed token when starting the white-noise playlist after sleep 
   mockGetCurrentPlayback.mockResolvedValue({ ...MOCK_PLAYBACK, remaining_seconds: 0, remaining_ms: 0 });
 
   const { result } = await renderHook(() =>
-    useRoutine(owlet, MOCK_TOKENS, 'iphone', POLL_INTERVAL_MS, false, 'client-id', 'client-secret'),
+    useRoutine(owlet, MOCK_TOKENS, 'iphone', POLL_INTERVAL_MS, false, 'client-id'),
   );
 
   await act(async () => {
@@ -364,7 +364,7 @@ it('falls back to the passed token when the refresh fails (getValidToken returns
   mockGetCurrentPlayback.mockResolvedValue(MOCK_PLAYBACK);
 
   const { result } = await renderHook(() =>
-    useRoutine(owlet, MOCK_TOKENS, 'iphone', POLL_INTERVAL_MS, false, 'client-id', 'client-secret'),
+    useRoutine(owlet, MOCK_TOKENS, 'iphone', POLL_INTERVAL_MS, false, 'client-id'),
   );
 
   await act(async () => {

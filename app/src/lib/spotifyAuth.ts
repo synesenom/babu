@@ -31,14 +31,14 @@ export async function clearTokens(): Promise<void> {
   await SecureStore.deleteItemAsync(SECURE_KEY);
 }
 
-export async function getValidToken(clientId: string, clientSecret: string): Promise<string | null> {
+export async function getValidToken(clientId: string): Promise<string | null> {
   const tokens = await loadStoredTokens();
   if (!tokens) return null;
   if (Date.now() < tokens.expires_at - 60_000) {
     return tokens.access_token;
   }
   try {
-    const refreshed = await refreshAccessToken(clientId, clientSecret, tokens.refresh_token);
+    const refreshed = await refreshAccessToken(clientId, tokens.refresh_token);
     await saveTokens(refreshed);
     return refreshed.access_token;
   } catch {
@@ -48,7 +48,6 @@ export async function getValidToken(clientId: string, clientSecret: string): Pro
 
 export function useSpotifyAuth(
   clientId: string,
-  clientSecret: string,
 ): {
   tokens: SpotifyTokens | null;
   promptAsync: () => Promise<void>;

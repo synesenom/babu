@@ -26,12 +26,10 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Setup'>;
 
 const extra = Constants.expoConfig?.extra as {
   spotifyClientId?: string;
-  spotifyClientSecret?: string;
   mockMode?: boolean;
 } | undefined;
 
 const CLIENT_ID = extra?.spotifyClientId ?? '';
-const CLIENT_SECRET = extra?.spotifyClientSecret ?? '';
 const MOCK_MODE = extra?.mockMode ?? false;
 
 const MOCK_SPOTIFY_TOKENS: SpotifyTokens = {
@@ -52,7 +50,7 @@ export default function SetupScreen({ navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [storedTokens, setStoredTokens] = useState<SpotifyTokens | null>(null);
 
-  const { tokens, promptAsync, isLoading: authLoading } = useSpotifyAuth(CLIENT_ID, CLIENT_SECRET);
+  const { tokens, promptAsync, isLoading: authLoading } = useSpotifyAuth(CLIENT_ID);
 
   useEffect(() => {
     (async () => {

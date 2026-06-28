@@ -86,14 +86,14 @@ describe('getValidToken()', () => {
   it('returns null when no tokens are stored', async () => {
     mockGetItem.mockResolvedValueOnce(null);
 
-    expect(await getValidToken('cid', 'csecret')).toBeNull();
+    expect(await getValidToken('cid')).toBeNull();
   });
 
   it('returns access_token directly when not yet expired', async () => {
     const fresh: SpotifyTokens = { ...STORED_TOKENS, expires_at: Date.now() + 120_000 };
     mockGetItem.mockResolvedValueOnce(JSON.stringify(fresh));
 
-    const token = await getValidToken('cid', 'csecret');
+    const token = await getValidToken('cid');
 
     expect(token).toBe(fresh.access_token);
     expect(mockRefresh).not.toHaveBeenCalled();
@@ -110,10 +110,10 @@ describe('getValidToken()', () => {
     mockRefresh.mockResolvedValueOnce(refreshed);
     mockSetItem.mockResolvedValueOnce();
 
-    const token = await getValidToken('cid', 'csecret');
+    const token = await getValidToken('cid');
 
     expect(token).toBe('new-access');
-    expect(mockRefresh).toHaveBeenCalledWith('cid', 'csecret', expired.refresh_token);
+    expect(mockRefresh).toHaveBeenCalledWith('cid', expired.refresh_token);
     expect(mockSetItem).toHaveBeenCalledTimes(1);
   });
 
@@ -122,6 +122,6 @@ describe('getValidToken()', () => {
     mockGetItem.mockResolvedValueOnce(JSON.stringify(expired));
     mockRefresh.mockRejectedValueOnce(new Error('401 Unauthorized'));
 
-    expect(await getValidToken('cid', 'csecret')).toBeNull();
+    expect(await getValidToken('cid')).toBeNull();
   });
 });
