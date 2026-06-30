@@ -81,6 +81,7 @@ export function useRoutine(
     if (!owlet || !tokens) return;
     if (tickingRef.current) return;
     tickingRef.current = true;
+    const tickStartTime = Date.now();
 
     try {
       const reading = await owlet.read();
@@ -105,8 +106,9 @@ export function useRoutine(
           dispatch({ type: 'TRANSITIONING' });
 
           const remainingSeconds = playback?.remaining_seconds ?? 0;
-          if (remainingSeconds > 0) {
-            await new Promise<void>((resolve) => setTimeout(resolve, remainingSeconds * 1000));
+          const waitMs = Math.max(0, remainingSeconds * 1000 - (Date.now() - tickStartTime));
+          if (waitMs > 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
           }
 
           const deviceId = await findDeviceByName(accessToken, deviceName);
