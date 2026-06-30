@@ -456,3 +456,65 @@ it('does not restart Chopin once a transition is in progress', async () => {
     expect.anything(),
   );
 });
+
+// ---------------------------------------------------------------------------
+// 12. Elapsed-time correction — remaining_seconds from the Spotify API is a
+//     snapshot taken before owlet.read() + token refresh finish. Without
+//     correction the wait is too long: Spotify auto-advances (repeat mode) and
+//     a fresh Chopin track plays for several seconds before white noise starts.
+// ---------------------------------------------------------------------------
+
+it('subtracts elapsed tick time from the track-end wait so white noise starts at the track boundary', async () => {
+  const REMAINING_SECONDS = 10;
+  const OWLET_READ_DELAY_MS = 3_000; // simulates Owlet auth chain latency
+
+  let resolveOwletRead!: (r: OwletReading) => void;
+  const owlet = {
+    read: jest.fn().mockImplementationOnce(
+      () => new Promise<OwletReading>((resolve) => { resolveOwletRead = resolve; }),
+    ),
+  } as unknown as Owlet;
+
+  mockGetCurrentPlayback.mockResolvedValue({
+    ...MOCK_PLAYBACK,
+    remaining_seconds: REMAINING_SECONDS,
+    remaining_ms: REMAINING_SECONDS * 1000,
+  });
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  // Tick fires; owlet.read() blocks.
+  await advanceInterval();
+
+  // Advance fake clock by OWLET_READ_DELAY_MS while the tick is in flight, so
+  // that Date.now() - tickStartTime reflects real API latency when elapsed is
+  // computed inside the hook.
+  await act(async () => {
+    jest.advanceTimersByTime(OWLET_READ_DELAY_MS);
+    await new Promise<void>((r) => setImmediate(r));
+  });
+
+  // Resolve owlet.read() with a low HR — the rest of the tick runs synchronously.
+  await act(async () => {
+    resolveOwletRead({ ...DEFAULT_READING, heart_rate: 90 });
+    await new Promise<void>((r) => setImmediate(r));
+  });
+
+  expect(result.current.state.status).toBe('transitioning');
+
+  // White noise should start after (REMAINING_SECONDS * 1000 - OWLET_READ_DELAY_MS),
+  // not after the full REMAINING_SECONDS * 1000.
+  const expectedWaitMs = REMAINING_SECONDS * 1000 - OWLET_READ_DELAY_MS;
+  await advanceInterval(expectedWaitMs);
+
+  expect(result.current.state.status).toBe('done');
+  expect(mockStartPlaylist).toHaveBeenCalledWith(
+    expect.any(String),
+    WHITENOISE_PLAYLIST,
+    'dev1',
+  );
+});
