@@ -253,3 +253,4 @@ maestro test e2e/
 - Spotify Premium is required — free accounts cannot control playback via the API.
 - The Owlet integration uses an unofficial reverse-engineered API and may break if Owlet updates their backend.
 - The heart-rate threshold (120 BPM) is tuned for an infant; adjust `HR_THRESHOLD` to taste.
+- **Credential storage:** Owlet credentials (email and password) are persisted in `expo-secure-store` with `WHEN_UNLOCKED_THIS_DEVICE_ONLY` protection. On a non-rooted device this is reasonably safe, but a rooted or otherwise compromised device could expose the raw password. The Owlet unofficial API does not provide a refresh-token mechanism, so storing the password is currently unavoidable. Do not use this app on a rooted device, and avoid reusing your Owlet password on other services.
