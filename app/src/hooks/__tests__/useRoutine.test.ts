@@ -336,6 +336,11 @@ it('uses the refreshed token when starting the white-noise playlist after sleep 
   });
 
   await advanceInterval();
+  expect(result.current.state.status).toBe('transitioning');
+
+  // remaining_seconds is 0, so the white-noise switch is scheduled with a
+  // zero-delay timer rather than run inline — flush it.
+  await advanceInterval(0);
 
   expect(result.current.state.status).toBe('done');
   expect(mockFindDeviceByName).toHaveBeenCalledWith('fresh-token', 'iphone');
@@ -414,10 +419,12 @@ it('skips a tick while the previous tick is still in flight (no overlapping read
   });
 });
 
-it('does not restart Chopin once a transition is in progress', async () => {
+it('does not restart Chopin once a transition is in progress, but keeps polling vitals', async () => {
   // tick 1's read resolves low (transition); tick 2 would read high (keep-alive)
-  // but must never run because tick 1 holds the re-entrancy guard through the
-  // remaining-track wait.
+  // but must never run because tick 1 holds the re-entrancy guard while it's
+  // in flight. Once tick 1 hands off to the track-end wait, polling resumes —
+  // later ticks must see the transition already locked in and only update
+  // vitals, never restart Chopin.
   let resolveRead!: (r: OwletReading) => void;
   const read = jest
     .fn()
@@ -428,8 +435,8 @@ it('does not restart Chopin once a transition is in progress', async () => {
   const owlet = { read } as unknown as Owlet;
   mockGetCurrentPlayback.mockResolvedValue({
     ...MOCK_PLAYBACK,
-    remaining_seconds: 5,
-    remaining_ms: 5000,
+    remaining_seconds: 7,
+    remaining_ms: 7000,
   });
 
   const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
@@ -441,14 +448,69 @@ it('does not restart Chopin once a transition is in progress', async () => {
   await advanceInterval(); // tick 1 fires, blocks on pending low read
   await advanceInterval(); // tick 2 fires while tick 1 in flight — must be skipped
 
-  // Release tick 1's low reading → it should transition and start white noise.
+  // Release tick 1's low reading → it should transition and schedule the
+  // white-noise switch for the end of the track, without holding up polling.
   await act(async () => {
     resolveRead({ ...DEFAULT_READING, heart_rate: 90 });
     await new Promise<void>((r) => setImmediate(r));
   });
-  await advanceInterval(5000); // wait out the remaining track
+  expect(result.current.state.status).toBe('transitioning');
 
-  expect(read).toHaveBeenCalledTimes(1);
+  await advanceInterval(7000); // wait out the remaining track
+
+  // A live tick ran during the wait (transitionRef locked it out of restarting
+  // Chopin, but not out of reading vitals) before the white-noise switch fired.
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(result.current.state.lastReading?.heart_rate).toBe(130);
+  expect(result.current.state.status).toBe('done');
+  expect(mockStartPlaylist).toHaveBeenCalledWith(MOCK_TOKENS.access_token, WHITENOISE_PLAYLIST, 'dev1');
+  expect(mockStartPlaylist).not.toHaveBeenCalledWith(
+    expect.anything(),
+    CHOPIN_PLAYLIST,
+    expect.anything(),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 13. Vitals keep updating live while a transition waits out the remaining
+//     track — the routine must not freeze the displayed HR/O2/battery at
+//     whatever reading triggered the transition.
+// ---------------------------------------------------------------------------
+
+it('keeps polling live owlet vitals while a transition is waiting out the remaining track', async () => {
+  const REMAINING_SECONDS = 12;
+  const owlet = makeOwlet([{ heart_rate: 90 }, { heart_rate: 85 }, { heart_rate: 80 }]);
+  mockGetCurrentPlayback.mockResolvedValue({
+    ...MOCK_PLAYBACK,
+    remaining_seconds: REMAINING_SECONDS,
+    remaining_ms: REMAINING_SECONDS * 1000,
+  });
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval(); // t=5000: tick 1 — HR 90 triggers the transition
+  expect(result.current.state.status).toBe('transitioning');
+  expect(result.current.state.lastReading?.heart_rate).toBe(90);
+  expect(mockStartPlaylist).not.toHaveBeenCalled();
+
+  await advanceInterval(); // t=10000: still waiting — vitals must keep updating
+  expect(result.current.state.status).toBe('transitioning');
+  expect(result.current.state.lastReading?.heart_rate).toBe(85);
+  expect((owlet.read as jest.Mock)).toHaveBeenCalledTimes(2);
+  expect(mockStartPlaylist).not.toHaveBeenCalled();
+
+  await advanceInterval(); // t=15000: still waiting, another live update
+  expect(result.current.state.status).toBe('transitioning');
+  expect(result.current.state.lastReading?.heart_rate).toBe(80);
+  expect((owlet.read as jest.Mock)).toHaveBeenCalledTimes(3);
+
+  await advanceInterval(2000); // t=17000: track ends, white noise starts
+
+  expect(result.current.state.status).toBe('done');
   expect(mockStartPlaylist).toHaveBeenCalledWith(MOCK_TOKENS.access_token, WHITENOISE_PLAYLIST, 'dev1');
   expect(mockStartPlaylist).not.toHaveBeenCalledWith(
     expect.anything(),

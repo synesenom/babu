@@ -67,8 +67,12 @@ export function useRoutine(
   // second tick while the first is still running. That race let a stale tick
   // restart Chopin after a transition had already begun, so the routine showed
   // "transitioning" but never switched to white noise. While a tick is in
-  // flight (including the remaining-track wait), later ticks are skipped.
+  // flight, later ticks are skipped.
   const tickingRef = useRef(false);
+  // Set once a transition has been triggered, so later ticks keep polling
+  // vitals (for a live display) without re-evaluating HR or restarting Chopin.
+  const transitionRef = useRef(false);
+  const transitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearPolling = useCallback(() => {
     if (intervalRef.current !== null) {
@@ -76,6 +80,29 @@ export function useRoutine(
       intervalRef.current = null;
     }
   }, []);
+
+  const clearTransitionTimeout = useCallback(() => {
+    if (transitionTimeoutRef.current !== null) {
+      clearTimeout(transitionTimeoutRef.current);
+      transitionTimeoutRef.current = null;
+    }
+  }, []);
+
+  // Switches to the white-noise playlist once the current Chopin track ends.
+  // Runs on its own timer (not inside tick()'s in-flight guard) so polling for
+  // live vitals keeps going while this waits out the remaining track.
+  const completeTransition = useCallback(async (accessToken: string) => {
+    try {
+      const deviceId = await findDeviceByName(accessToken, deviceName);
+      if (deviceId) {
+        await startPlaylist(accessToken, WHITENOISE_PLAYLIST, deviceId);
+      }
+      clearPolling();
+      dispatch({ type: 'DONE' });
+    } catch (err) {
+      dispatch({ type: 'ERROR', payload: err instanceof Error ? err.message : String(err) });
+    }
+  }, [deviceName, clearPolling]);
 
   const tick = useCallback(async () => {
     if (!owlet || !tokens) return;
@@ -99,32 +126,27 @@ export function useRoutine(
       const playback = await getCurrentPlayback(accessToken);
       dispatch({ type: 'NOW_PLAYING', payload: playback });
 
-      if (!monitorOnly) {
-        if (reading.heart_rate !== null && reading.heart_rate < HR_THRESHOLD) {
-          clearPolling();
-          dispatch({ type: 'TRANSITIONING' });
+      if (monitorOnly || transitionRef.current) return;
 
-          // remaining_seconds comes from a live Spotify query made after
-          // owlet.read() + token refresh already finished, so it is already
-          // fresh as of now — waiting it out in full lands exactly on the
-          // track boundary without cutting into the still-playing Chopin track.
-          const remainingSeconds = playback?.remaining_seconds ?? 0;
-          if (remainingSeconds > 0) {
-            await new Promise<void>((resolve) => setTimeout(resolve, remainingSeconds * 1000));
-          }
+      if (reading.heart_rate !== null && reading.heart_rate < HR_THRESHOLD) {
+        transitionRef.current = true;
+        dispatch({ type: 'TRANSITIONING' });
 
+        // remaining_seconds comes from a live Spotify query made after
+        // owlet.read() + token refresh already finished, so it is already
+        // fresh as of now — waiting it out in full lands exactly on the
+        // track boundary without cutting into the still-playing Chopin track.
+        const remainingSeconds = playback?.remaining_seconds ?? 0;
+        transitionTimeoutRef.current = setTimeout(() => {
+          transitionTimeoutRef.current = null;
+          void completeTransition(accessToken);
+        }, Math.max(0, remainingSeconds * 1000));
+      } else {
+        const remainingSeconds = playback?.remaining_seconds ?? null;
+        if (remainingSeconds === null || remainingSeconds < RESTART_THRESHOLD_SECONDS) {
           const deviceId = await findDeviceByName(accessToken, deviceName);
           if (deviceId) {
-            await startPlaylist(accessToken, WHITENOISE_PLAYLIST, deviceId);
-          }
-          dispatch({ type: 'DONE' });
-        } else {
-          const remainingSeconds = playback?.remaining_seconds ?? null;
-          if (remainingSeconds === null || remainingSeconds < RESTART_THRESHOLD_SECONDS) {
-            const deviceId = await findDeviceByName(accessToken, deviceName);
-            if (deviceId) {
-              await startPlaylist(accessToken, CHOPIN_PLAYLIST, deviceId);
-            }
+            await startPlaylist(accessToken, CHOPIN_PLAYLIST, deviceId);
           }
         }
       }
@@ -133,23 +155,27 @@ export function useRoutine(
     } finally {
       tickingRef.current = false;
     }
-  }, [owlet, tokens, deviceName, monitorOnly, clearPolling, clientId]);
+  }, [owlet, tokens, deviceName, monitorOnly, clientId, completeTransition]);
 
   const start = useCallback(() => {
+    transitionRef.current = false;
     dispatch({ type: 'START' });
     intervalRef.current = setInterval(tick, pollIntervalMs);
-  }, [tick]);
+  }, [tick, pollIntervalMs]);
 
   const stop = useCallback(() => {
     clearPolling();
+    clearTransitionTimeout();
+    transitionRef.current = false;
     dispatch({ type: 'STOP' });
-  }, [clearPolling]);
+  }, [clearPolling, clearTransitionTimeout]);
 
   useEffect(() => {
     return () => {
       clearPolling();
+      clearTransitionTimeout();
     };
-  }, [clearPolling]);
+  }, [clearPolling, clearTransitionTimeout]);
 
   return { state, start, stop };
 }
