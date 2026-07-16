@@ -81,7 +81,6 @@ export function useRoutine(
     if (!owlet || !tokens) return;
     if (tickingRef.current) return;
     tickingRef.current = true;
-    const tickStartTime = Date.now();
 
     try {
       const reading = await owlet.read();
@@ -105,10 +104,13 @@ export function useRoutine(
           clearPolling();
           dispatch({ type: 'TRANSITIONING' });
 
+          // remaining_seconds comes from a live Spotify query made after
+          // owlet.read() + token refresh already finished, so it is already
+          // fresh as of now — waiting it out in full lands exactly on the
+          // track boundary without cutting into the still-playing Chopin track.
           const remainingSeconds = playback?.remaining_seconds ?? 0;
-          const waitMs = Math.max(0, remainingSeconds * 1000 - (Date.now() - tickStartTime));
-          if (waitMs > 0) {
-            await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+          if (remainingSeconds > 0) {
+            await new Promise<void>((resolve) => setTimeout(resolve, remainingSeconds * 1000));
           }
 
           const deviceId = await findDeviceByName(accessToken, deviceName);
