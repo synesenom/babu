@@ -69,10 +69,13 @@ export function useRoutine(
   // "transitioning" but never switched to white noise. While a tick is in
   // flight, later ticks are skipped.
   const tickingRef = useRef(false);
-  // Set once a transition has been triggered, so later ticks keep polling
-  // vitals (for a live display) without re-evaluating HR or restarting Chopin.
+  // Set once HR drops below the sleep threshold. From then on every tick stops
+  // evaluating HR / restarting Chopin and instead only waits for the current
+  // track to reach its tail before switching to white noise.
   const transitionRef = useRef(false);
-  const transitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set once the white-noise switch has been kicked off, so a later tick that
+  // races the switch cannot fire it a second time.
+  const switchingRef = useRef(false);
 
   const clearPolling = useCallback(() => {
     if (intervalRef.current !== null) {
@@ -81,27 +84,16 @@ export function useRoutine(
     }
   }, []);
 
-  const clearTransitionTimeout = useCallback(() => {
-    if (transitionTimeoutRef.current !== null) {
-      clearTimeout(transitionTimeoutRef.current);
-      transitionTimeoutRef.current = null;
-    }
-  }, []);
-
-  // Switches to the white-noise playlist once the current Chopin track ends.
-  // Runs on its own timer (not inside tick()'s in-flight guard) so polling for
-  // live vitals keeps going while this waits out the remaining track.
+  // Switches to the white-noise playlist. Called from within a tick (serialized
+  // by tickingRef) the moment a live poll shows the current Chopin track in its
+  // final seconds — see tick() for why this is poll-driven rather than timed.
   const completeTransition = useCallback(async (accessToken: string) => {
-    try {
-      const deviceId = await findDeviceByName(accessToken, deviceName);
-      if (deviceId) {
-        await startPlaylist(accessToken, WHITENOISE_PLAYLIST, deviceId);
-      }
-      clearPolling();
-      dispatch({ type: 'DONE' });
-    } catch (err) {
-      dispatch({ type: 'ERROR', payload: err instanceof Error ? err.message : String(err) });
+    const deviceId = await findDeviceByName(accessToken, deviceName);
+    if (deviceId) {
+      await startPlaylist(accessToken, WHITENOISE_PLAYLIST, deviceId);
     }
+    clearPolling();
+    dispatch({ type: 'DONE' });
   }, [deviceName, clearPolling]);
 
   const tick = useCallback(async () => {
@@ -126,28 +118,58 @@ export function useRoutine(
       const playback = await getCurrentPlayback(accessToken);
       dispatch({ type: 'NOW_PLAYING', payload: playback });
 
-      if (monitorOnly || transitionRef.current) return;
+      if (monitorOnly) return;
 
-      if (reading.heart_rate !== null && reading.heart_rate < HR_THRESHOLD) {
+      // Lock in the transition the first time HR drops below the sleep threshold.
+      // Once locked, HR is no longer re-evaluated: a brief blip back above the
+      // threshold must not cancel the switch to white noise.
+      if (
+        !transitionRef.current &&
+        reading.heart_rate !== null &&
+        reading.heart_rate < HR_THRESHOLD
+      ) {
         transitionRef.current = true;
         dispatch({ type: 'TRANSITIONING' });
+      }
 
-        // remaining_seconds comes from a live Spotify query made after
-        // owlet.read() + token refresh already finished, so it is already
-        // fresh as of now — waiting it out in full lands exactly on the
-        // track boundary without cutting into the still-playing Chopin track.
-        const remainingSeconds = playback?.remaining_seconds ?? 0;
-        transitionTimeoutRef.current = setTimeout(() => {
-          transitionTimeoutRef.current = null;
-          void completeTransition(accessToken);
-        }, Math.max(0, remainingSeconds * 1000));
-      } else {
-        const remainingSeconds = playback?.remaining_seconds ?? null;
-        if (remainingSeconds === null || remainingSeconds < RESTART_THRESHOLD_SECONDS) {
-          const deviceId = await findDeviceByName(accessToken, deviceName);
-          if (deviceId) {
-            await startPlaylist(accessToken, CHOPIN_PLAYLIST, deviceId);
+      // `remaining_seconds` is a live query against Spotify made on THIS tick, so
+      // it reflects the track's real position right now. Both branches below key
+      // off "is the current track in its final seconds (or nothing playing)?".
+      const remainingSeconds = playback?.remaining_seconds ?? null;
+      const trackEnding =
+        remainingSeconds === null || remainingSeconds < RESTART_THRESHOLD_SECONDS;
+
+      if (transitionRef.current) {
+        // Sleep detected. Let the current Chopin track wind down, then switch to
+        // white noise — but do it while the track is still in its final seconds,
+        // BEFORE the repeating playlist auto-advances to a fresh Chopin track.
+        //
+        // This is deliberately poll-driven, not a one-shot setTimeout seeded with
+        // the remaining_seconds captured at sleep-detection time. That timer
+        // approach cannot hit the boundary: the snapshot ages by network latency
+        // and the playlist auto-advances, so the switch reliably landed a few
+        // seconds INTO the next Chopin track. Deciding from each fresh poll and
+        // switching before the boundary eliminates that bleed entirely. We never
+        // restart Chopin once transitioning.
+        if (trackEnding && !switchingRef.current) {
+          switchingRef.current = true;
+          try {
+            await completeTransition(accessToken);
+          } catch (err) {
+            // Let a later poll retry the switch if this attempt failed.
+            switchingRef.current = false;
+            throw err;
           }
+        }
+        return;
+      }
+
+      // Awake: keep Chopin alive — restart it when the track is ending or nothing
+      // is playing.
+      if (trackEnding) {
+        const deviceId = await findDeviceByName(accessToken, deviceName);
+        if (deviceId) {
+          await startPlaylist(accessToken, CHOPIN_PLAYLIST, deviceId);
         }
       }
     } catch (err) {
@@ -159,23 +181,23 @@ export function useRoutine(
 
   const start = useCallback(() => {
     transitionRef.current = false;
+    switchingRef.current = false;
     dispatch({ type: 'START' });
     intervalRef.current = setInterval(tick, pollIntervalMs);
   }, [tick, pollIntervalMs]);
 
   const stop = useCallback(() => {
     clearPolling();
-    clearTransitionTimeout();
     transitionRef.current = false;
+    switchingRef.current = false;
     dispatch({ type: 'STOP' });
-  }, [clearPolling, clearTransitionTimeout]);
+  }, [clearPolling]);
 
   useEffect(() => {
     return () => {
       clearPolling();
-      clearTransitionTimeout();
     };
-  }, [clearPolling, clearTransitionTimeout]);
+  }, [clearPolling]);
 
   return { state, start, stop };
 }

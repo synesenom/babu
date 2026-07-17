@@ -42,6 +42,10 @@ const MOCK_PLAYBACK: SpotifyPlayback = {
   device_id: 'dev1',
 };
 
+// A Chopin track in its final seconds — a live poll seeing this is the routine's
+// cue to switch to white noise before the repeating playlist auto-advances.
+const TRACK_TAIL = { ...MOCK_PLAYBACK, remaining_seconds: 3, remaining_ms: 3000 };
+
 const MOCK_TOKENS: SpotifyTokens = {
   access_token: 'test-access-token',
   refresh_token: 'test-refresh-token',
@@ -132,17 +136,48 @@ it('after one tick with HR 120, status stays running and lastReading.heart_rate 
 });
 
 // ---------------------------------------------------------------------------
-// 4. Sleep detection (HR below threshold)
+// 4. Sleep detection (HR below threshold) — switch happens on the live track
+//    tail, not after a blind wait-out-the-track timer.
 // ---------------------------------------------------------------------------
 
-it('after tick with HR 90, transitions to transitioning then done after remaining track time', async () => {
-  const REMAINING_SECONDS = 15;
+it('after HR drops below threshold, stays transitioning until a live poll shows the track tail, then switches to white noise', async () => {
   const owlet = makeOwlet([{ heart_rate: 90 }]);
-  mockGetCurrentPlayback.mockResolvedValue({
-    ...MOCK_PLAYBACK,
-    remaining_seconds: REMAINING_SECONDS,
-    remaining_ms: REMAINING_SECONDS * 1000,
+  mockGetCurrentPlayback
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 12, remaining_ms: 12000 })
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 7, remaining_ms: 7000 })
+    .mockResolvedValueOnce(TRACK_TAIL);
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
   });
+
+  await advanceInterval(); // poll 1: HR 90 locks in the transition; track has 12s left → wait
+  expect(result.current.state.status).toBe('transitioning');
+  expect(mockStartPlaylist).not.toHaveBeenCalled();
+
+  await advanceInterval(); // poll 2: 7s left → still wait
+  expect(result.current.state.status).toBe('transitioning');
+  expect(mockStartPlaylist).not.toHaveBeenCalled();
+
+  await advanceInterval(); // poll 3: 3s left (track tail) → switch before it auto-advances
+  expect(result.current.state.status).toBe('done');
+  expect(mockStartPlaylist).toHaveBeenCalledWith(
+    MOCK_TOKENS.access_token,
+    WHITENOISE_PLAYLIST,
+    'dev1',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 4b. Switch immediately when nothing is playing at sleep detection — there is
+//     no track to wind down.
+// ---------------------------------------------------------------------------
+
+it('switches to white noise immediately when nothing is playing at sleep detection', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  mockGetCurrentPlayback.mockResolvedValue(null);
 
   const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
 
@@ -152,15 +187,16 @@ it('after tick with HR 90, transitions to transitioning then done after remainin
 
   await advanceInterval();
 
-  expect(result.current.state.status).toBe('transitioning');
-
-  await advanceInterval(REMAINING_SECONDS * 1000);
-
   expect(result.current.state.status).toBe('done');
   expect(mockStartPlaylist).toHaveBeenCalledWith(
     MOCK_TOKENS.access_token,
     WHITENOISE_PLAYLIST,
     'dev1',
+  );
+  expect(mockStartPlaylist).not.toHaveBeenCalledWith(
+    expect.anything(),
+    CHOPIN_PLAYLIST,
+    expect.anything(),
   );
 });
 
@@ -325,6 +361,7 @@ it('refreshes the access token via getValidToken each tick and uses it for Spoti
 it('uses the refreshed token when starting the white-noise playlist after sleep detection', async () => {
   mockGetValidToken.mockResolvedValue('fresh-token');
   const owlet = makeOwlet([{ heart_rate: 90 }]);
+  // Track already at its tail, so the switch fires on the first poll.
   mockGetCurrentPlayback.mockResolvedValue({ ...MOCK_PLAYBACK, remaining_seconds: 0, remaining_ms: 0 });
 
   const { result } = await renderHook(() =>
@@ -336,11 +373,6 @@ it('uses the refreshed token when starting the white-noise playlist after sleep 
   });
 
   await advanceInterval();
-  expect(result.current.state.status).toBe('transitioning');
-
-  // remaining_seconds is 0, so the white-noise switch is scheduled with a
-  // zero-delay timer rather than run inline — flush it.
-  await advanceInterval(0);
 
   expect(result.current.state.status).toBe('done');
   expect(mockFindDeviceByName).toHaveBeenCalledWith('fresh-token', 'iphone');
@@ -419,12 +451,12 @@ it('skips a tick while the previous tick is still in flight (no overlapping read
   });
 });
 
-it('does not restart Chopin once a transition is in progress, but keeps polling vitals', async () => {
+it('does not restart Chopin once a transition is in progress, but keeps polling until the track tail', async () => {
   // tick 1's read resolves low (transition); tick 2 would read high (keep-alive)
   // but must never run because tick 1 holds the re-entrancy guard while it's
-  // in flight. Once tick 1 hands off to the track-end wait, polling resumes —
-  // later ticks must see the transition already locked in and only update
-  // vitals, never restart Chopin.
+  // in flight. Once tick 1 locks in the transition, later ticks must only wait
+  // for the current track's tail and switch to white noise — never restart
+  // Chopin, even though HR has climbed back above the threshold.
   let resolveRead!: (r: OwletReading) => void;
   const read = jest
     .fn()
@@ -433,11 +465,9 @@ it('does not restart Chopin once a transition is in progress, but keeps polling 
     )
     .mockResolvedValue({ ...DEFAULT_READING, heart_rate: 130 });
   const owlet = { read } as unknown as Owlet;
-  mockGetCurrentPlayback.mockResolvedValue({
-    ...MOCK_PLAYBACK,
-    remaining_seconds: 7,
-    remaining_ms: 7000,
-  });
+  mockGetCurrentPlayback
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 7, remaining_ms: 7000 })
+    .mockResolvedValue(TRACK_TAIL);
 
   const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
 
@@ -448,18 +478,16 @@ it('does not restart Chopin once a transition is in progress, but keeps polling 
   await advanceInterval(); // tick 1 fires, blocks on pending low read
   await advanceInterval(); // tick 2 fires while tick 1 in flight — must be skipped
 
-  // Release tick 1's low reading → it should transition and schedule the
-  // white-noise switch for the end of the track, without holding up polling.
+  // Release tick 1's low reading → it locks in the transition; the track still
+  // has 7s left so no switch yet, and polling continues.
   await act(async () => {
     resolveRead({ ...DEFAULT_READING, heart_rate: 90 });
     await new Promise<void>((r) => setImmediate(r));
   });
   expect(result.current.state.status).toBe('transitioning');
 
-  await advanceInterval(7000); // wait out the remaining track
+  await advanceInterval(); // a live tick runs: HR 130 (ignored), track tail → switch
 
-  // A live tick ran during the wait (transitionRef locked it out of restarting
-  // Chopin, but not out of reading vitals) before the white-noise switch fired.
   expect(read).toHaveBeenCalledTimes(2);
   expect(result.current.state.lastReading?.heart_rate).toBe(130);
   expect(result.current.state.status).toBe('done');
@@ -477,14 +505,12 @@ it('does not restart Chopin once a transition is in progress, but keeps polling 
 //     whatever reading triggered the transition.
 // ---------------------------------------------------------------------------
 
-it('keeps polling live owlet vitals while a transition is waiting out the remaining track', async () => {
-  const REMAINING_SECONDS = 12;
+it('keeps polling live owlet vitals while a transition waits for the current track to end', async () => {
   const owlet = makeOwlet([{ heart_rate: 90 }, { heart_rate: 85 }, { heart_rate: 80 }]);
-  mockGetCurrentPlayback.mockResolvedValue({
-    ...MOCK_PLAYBACK,
-    remaining_seconds: REMAINING_SECONDS,
-    remaining_ms: REMAINING_SECONDS * 1000,
-  });
+  mockGetCurrentPlayback
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 20, remaining_ms: 20000 })
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 12, remaining_ms: 12000 })
+    .mockResolvedValueOnce(TRACK_TAIL);
 
   const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
 
@@ -492,25 +518,21 @@ it('keeps polling live owlet vitals while a transition is waiting out the remain
     result.current.start();
   });
 
-  await advanceInterval(); // t=5000: tick 1 — HR 90 triggers the transition
+  await advanceInterval(); // poll 1: HR 90 triggers the transition; 20s left → wait
   expect(result.current.state.status).toBe('transitioning');
   expect(result.current.state.lastReading?.heart_rate).toBe(90);
   expect(mockStartPlaylist).not.toHaveBeenCalled();
 
-  await advanceInterval(); // t=10000: still waiting — vitals must keep updating
+  await advanceInterval(); // poll 2: still waiting — vitals must keep updating
   expect(result.current.state.status).toBe('transitioning');
   expect(result.current.state.lastReading?.heart_rate).toBe(85);
   expect((owlet.read as jest.Mock)).toHaveBeenCalledTimes(2);
   expect(mockStartPlaylist).not.toHaveBeenCalled();
 
-  await advanceInterval(); // t=15000: still waiting, another live update
-  expect(result.current.state.status).toBe('transitioning');
+  await advanceInterval(); // poll 3: track tail → switch, with the latest vitals shown
+  expect(result.current.state.status).toBe('done');
   expect(result.current.state.lastReading?.heart_rate).toBe(80);
   expect((owlet.read as jest.Mock)).toHaveBeenCalledTimes(3);
-
-  await advanceInterval(2000); // t=17000: track ends, white noise starts
-
-  expect(result.current.state.status).toBe('done');
   expect(mockStartPlaylist).toHaveBeenCalledWith(MOCK_TOKENS.access_token, WHITENOISE_PLAYLIST, 'dev1');
   expect(mockStartPlaylist).not.toHaveBeenCalledWith(
     expect.anything(),
@@ -520,29 +542,21 @@ it('keeps polling live owlet vitals while a transition is waiting out the remain
 });
 
 // ---------------------------------------------------------------------------
-// 12. Track-end wait is not shortened by earlier tick latency — getCurrentPlayback()
-//     queries Spotify live, *after* owlet.read() + token refresh finish, so the
-//     remaining_seconds it returns is already fresh as of that moment. It must
-//     not be reduced again by how long the preceding owlet.read() call took,
-//     or the wait ends early and white noise cuts into the still-playing track.
+// 12. The switch decision is made from a *live* poll of the current track, not
+//     a one-shot snapshot taken at sleep-detection time. A blind wait based on
+//     the first snapshot fires seconds into the next repeated Chopin track,
+//     because the playlist auto-advances at the boundary — the reported bug.
 // ---------------------------------------------------------------------------
 
-it('waits the full remaining_seconds from the playback fetch, unshortened by prior owlet.read() latency', async () => {
-  const REMAINING_SECONDS = 10;
-  const OWLET_READ_DELAY_MS = 3_000; // simulates Owlet auth chain latency
-
-  let resolveOwletRead!: (r: OwletReading) => void;
-  const owlet = {
-    read: jest.fn().mockImplementationOnce(
-      () => new Promise<OwletReading>((resolve) => { resolveOwletRead = resolve; }),
-    ),
-  } as unknown as Owlet;
-
-  mockGetCurrentPlayback.mockResolvedValue({
-    ...MOCK_PLAYBACK,
-    remaining_seconds: REMAINING_SECONDS,
-    remaining_ms: REMAINING_SECONDS * 1000,
-  });
+it('switches on the live track tail, never bleeding into an auto-advanced next Chopin track', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  // First poll sees a fresh 200s track. A blind wait-out-the-track timer would
+  // fire ~200s later — landing seconds into the *next* repeated Chopin track.
+  // The routine must keep polling and switch only when a live poll shows the
+  // current track in its final seconds.
+  mockGetCurrentPlayback
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 200, remaining_ms: 200000 })
+    .mockResolvedValue(TRACK_TAIL);
 
   const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
 
@@ -550,38 +564,20 @@ it('waits the full remaining_seconds from the playback fetch, unshortened by pri
     result.current.start();
   });
 
-  // Tick fires; owlet.read() blocks.
-  await advanceInterval();
-
-  // Advance fake clock while owlet.read() is still in flight, simulating a
-  // slow Owlet auth chain. getCurrentPlayback() is only called once read()
-  // resolves, so its remaining_seconds is already measured *after* this delay.
-  await act(async () => {
-    jest.advanceTimersByTime(OWLET_READ_DELAY_MS);
-    await new Promise<void>((r) => setImmediate(r));
-  });
-
-  // Resolve owlet.read() with a low HR — the rest of the tick runs synchronously.
-  await act(async () => {
-    resolveOwletRead({ ...DEFAULT_READING, heart_rate: 90 });
-    await new Promise<void>((r) => setImmediate(r));
-  });
-
-  expect(result.current.state.status).toBe('transitioning');
-
-  // White noise must not start before the full remaining track time has
-  // elapsed from the playback fetch — the prior owlet.read() delay must not
-  // shorten this wait.
-  await advanceInterval(REMAINING_SECONDS * 1000 - 1000);
+  await advanceInterval(); // poll 1: transition locked; 200s left → must NOT switch yet
   expect(result.current.state.status).toBe('transitioning');
   expect(mockStartPlaylist).not.toHaveBeenCalled();
 
-  await advanceInterval(1000);
-
+  await advanceInterval(); // poll 2: track tail → switch to white noise
   expect(result.current.state.status).toBe('done');
   expect(mockStartPlaylist).toHaveBeenCalledWith(
-    expect.any(String),
+    MOCK_TOKENS.access_token,
     WHITENOISE_PLAYLIST,
     'dev1',
+  );
+  expect(mockStartPlaylist).not.toHaveBeenCalledWith(
+    expect.anything(),
+    CHOPIN_PLAYLIST,
+    expect.anything(),
   );
 });
