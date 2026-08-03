@@ -14,6 +14,9 @@ export interface OwletReading {
   raw: Record<string, unknown>;
 }
 
+export type SpotifyAccessToken = string;
+export type SpotifyDeviceId = string;
+
 export interface SpotifyDevice {
   id: string;
   name: string;
