@@ -33,27 +33,6 @@ Yoto differs from Spotify in two ways that shape the design:
 Two unknowns must be closed before any Yoto code is written, hence the two spikes in
 Phase 0: the exact REST/auth surface, and whether an MQTT client is viable under Hermes.
 
-## Prerequisite: the content has to exist first
-
-The routine plays content that is already in the family library — it does not create it.
-Before any of this can be configured there must be:
-
-- a **lullaby playlist** — Chopin's compositions are public domain, but *recordings* are
-  not, so the audio needs to come from a public-domain or CC source
-  ([Musopen](https://musopen.org/) hosts a complete Chopin collection), a DRM-free
-  purchase, or a CD rip. Upload it as a Make Your Own playlist in the Yoto app.
-- a **white-noise target** — either Yoto's free in-app Sleep Sounds, if Step 1 confirms
-  they are API-addressable, or a MYO playlist containing the same audio.
-
-Neither needs to be linked to a physical card. Both appear in `GET /content/mine` with a
-`cardId`, which is what the app config stores.
-
-Yoto's API can also create playlists programmatically — request an upload URL from
-`/media/transcode/audio/uploadUrl`, `PUT` the file, poll
-`/media/upload/{uploadId}/transcoded`, then `POST /content`. That is deliberately **out
-of scope**: this is a one-time setup better done in the Yoto app than built into a
-bedtime monitor.
-
 ## The one hard constraint
 
 **Players cannot be powered on remotely.** Playback commands have no effect while the
@@ -97,13 +76,60 @@ confirm it fails, then implement.
 
 ## Phase 0 — Close the unknowns
 
+### Step 0 — One-time account setup
+
+No code. The manual work a human does once in the Yoto app and the developer dashboard,
+before any Yoto work can start. Everything here produces an input a later step consumes.
+
+**A. Source the lullaby audio.** Chopin's compositions are public domain, but
+*recordings* carry their own copyright, so the file must come from a clean source:
+[Musopen](https://musopen.org/) (public-domain and CC classical, free — it hosts a
+[complete Chopin collection](https://archive.org/details/musopen-chopin)), a DRM-free
+purchase, or a CD rip. Not from a streaming service. A single nocturne is enough to
+start, and a one-track playlist sidesteps the restart-semantics problem in Step 10
+entirely — "restart from the top" is the desired behaviour when there is only one track.
+
+**B. Create the lullaby playlist.** Yoto app → My Library → Make Your Own → upload,
+named identifiably (`babu lullaby`). **Do not link it to a physical card**: linking only
+buys offline playback and tap-to-play, while an unlinked playlist is fully streamable and
+carries a `cardId`, which is all the routine needs.
+
+**C. Decide the white-noise target.** Check My Library → Sleep Sounds for the free
+built-in brown/white/pink noise. If Step 1 finds those are not API-addressable, fall back
+to a second MYO playlist — cheaper to create while already in the app.
+
+**D. Capture the content IDs.** The config stores a card URI per role,
+`https://yoto.io/<cardId>`. Try the app's share action first — if the link is already in
+that form, it is literally the `uri` value `card/start` wants. Otherwise the IDs come
+from `GET /content/mine` once E is done.
+
+**E. Register the developer app** at [dashboard.yoto.dev](https://dashboard.yoto.dev/),
+signed in as the account that owns the player and the playlists. Capture the **client
+ID**; babu is a public client, so PKCE and **no client secret** — same reasoning as the
+Spotify secret removal in `ea30e1f`. Add redirect URIs `babu://auth` and
+`exp://localhost:8081/--/`, and enable the scopes listed above. If the dashboard rejects
+custom-scheme URIs and only accepts `https://` callbacks, the auth flow becomes
+device-code and Step 7 changes shape.
+
+**F. Check overnight availability.** Leave the Mini on its charger and see whether it is
+still reachable in the morning, plus roughly how long it takes to drop offline after
+playback stops. This decides whether the feature works unattended at all.
+
+**Deliverable:** `docs/yoto-api-notes.md` started with the two card URIs, the client ID,
+the redirect URI forms the dashboard accepted, and the overnight observation.
+
+Yoto's API can also create playlists programmatically — request an upload URL from
+`/media/transcode/audio/uploadUrl`, `PUT` the file, poll
+`/media/upload/{uploadId}/transcoded`, then `POST /content`. Deliberately **out of
+scope**: a one-time setup belongs in the Yoto app, not in a bedtime monitor.
+
 ### Step 1 — Verify the Yoto REST and OAuth surface
 
-Research only, no runtime code. Register a developer app at
-[dashboard.yoto.dev](https://dashboard.yoto.dev/) and confirm against a real account:
+Research only, no runtime code. Using the client ID and content IDs from Step 0, confirm
+against a real account:
 
-- Whether a native redirect URI (`babu://auth`) is accepted for a public client, or
-  whether the device-code flow is required instead.
+- Which flow actually works end to end: authorization-code + PKCE with `babu://auth`, or
+  device-code.
 - The exact request/response shape of `GET /device-v2/devices/mine`,
   `GET /device-v2/{deviceId}/status`, and `GET /card/family/library`.
 - How to enumerate a card's chapters (`GET /content/{cardId}` or equivalent) and what
@@ -124,8 +150,8 @@ Research only, no runtime code. Register a developer app at
   anything short of a physical button press brings it back.
 - Rate limits and anything in the terms of service that affects a hobby app.
 
-**Deliverable:** `docs/yoto-api-notes.md` with confirmed URLs, headers, sample JSON
-responses (credentials redacted), and the card URIs and chapter keys for both roles.
+**Deliverable:** extend the `docs/yoto-api-notes.md` started in Step 0 with confirmed
+URLs, headers, and sample JSON responses (credentials redacted).
 
 **Acceptance:** every URL and field name used in Steps 6–10 traces back to this file.
 
@@ -231,6 +257,10 @@ the rewrite — especially the regression tests for transition timing (commits `
 ## Phase 2 — Yoto library
 
 ### Step 6 — Yoto configuration and constants
+
+`YOTO_CLIENT_ID` is the client ID captured in Step 0. There is deliberately **no**
+`YOTO_CLIENT_SECRET`: the bundle ships to phones, so a secret could not be kept private —
+the same reasoning as the Spotify secret removal in `ea30e1f`.
 
 - `app/app.config.js`: expose `yotoClientId` from `YOTO_CLIENT_ID`.
 - `app/src/lib/constants.ts`: `YOTO_SCOPES`, `YOTO_AUTH`, `YOTO_API_BASE`,
@@ -442,9 +472,15 @@ Spotify and Yoto flows green.
 
 ### Step 16 — Documentation
 
-- `README.md`: Yoto setup (developer app registration, `YOTO_CLIENT_ID`, picking the
-  card and chapters), and note that Yoto needs no subscription where Spotify needs
-  Premium. Keep the coverage badge URL format intact — CI rewrites it with `sed`.
+- `README.md`: a complete Yoto setup section, written so someone who has never touched
+  the Yoto API can go from nothing to a working routine. Lift the content from Step 0
+  and `docs/yoto-api-notes.md` rather than re-deriving it — preparing the audio and why
+  the source matters, creating the playlists without linking a card, choosing the
+  white-noise target, registering the developer app (redirect URIs, scopes, no client
+  secret), setting `YOTO_CLIENT_ID`, and selecting the player and both targets in the
+  app. Note the two limits that surprise people: a player cannot be powered on remotely,
+  and Yoto needs no subscription where Spotify requires Premium. Keep the coverage badge
+  URL format intact — CI rewrites it with `sed`.
 - `CLAUDE.md`: update the repository layout tree, add a "Player backends" architecture
   section describing `PlayerBackend` and the two adapters, document the Yoto MQTT
   constants, and revise the routine state-machine section to say the tick reads from a
@@ -470,7 +506,8 @@ Spotify and Yoto flows green.
 
 | # | Step | Issue | Depends on | Done |
 |---|---|---|---|---|
-| 1 | Verify the Yoto REST and OAuth surface | #27 | — | |
+| 0 | One-time account setup (playlists, developer app) | #43 | — | |
+| 1 | Verify the Yoto REST and OAuth surface | #27 | #43 | |
 | 2 | Spike the MQTT transport under Hermes | #29 | #27 | |
 | 3 | Define `PlayerBackend` and neutral playback types | #28 | — | |
 | 4 | `SpotifyPlayer` adapter | #30 | #28 | |
