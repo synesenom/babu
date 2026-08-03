@@ -1,6 +1,7 @@
 # babu
 
 ![Coverage](https://img.shields.io/badge/coverage-72%25-yellow)
+[![CodeScene Average Code Health](https://codescene.io/projects/83277/status-badges/average-code-health)](https://codescene.io/projects/83277)
 
 Automated bedtime routine for Android: monitors a baby's heart rate via the **Owlet Smart Sock** and controls **Spotify** playback accordingly. Playback starts with Chopin nocturnes; once the heart rate drops below the sleep threshold, the app waits for the current track to finish and switches to white noise.
 
