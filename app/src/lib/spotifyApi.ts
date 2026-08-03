@@ -72,6 +72,10 @@ export async function getRemainingSeconds(token: string): Promise<number | null>
   return playback ? playback.remaining_seconds : null;
 }
 
+function isOkOrNoContent(res: Response): boolean {
+  return res.ok || res.status === 204;
+}
+
 export async function startPlaylist(token: string, playlistUri: string, deviceId: string): Promise<boolean> {
   if (token === MOCK_TOKEN) return true;
   const url = `${SPOTIFY_API}/me/player/play?device_id=${encodeURIComponent(deviceId)}`;
@@ -79,25 +83,24 @@ export async function startPlaylist(token: string, playlistUri: string, deviceId
     method: 'PUT',
     body: JSON.stringify({ context_uri: playlistUri }),
   });
-  return res.ok || res.status === 204;
+  return isOkOrNoContent(res);
 }
 
-export async function pause(token: string, deviceId?: string): Promise<boolean> {
+async function setPlaybackState(action: 'play' | 'pause', token: string, deviceId?: string): Promise<boolean> {
   if (token === MOCK_TOKEN) return true;
   const url = deviceId
-    ? `${SPOTIFY_API}/me/player/pause?device_id=${encodeURIComponent(deviceId)}`
-    : `${SPOTIFY_API}/me/player/pause`;
+    ? `${SPOTIFY_API}/me/player/${action}?device_id=${encodeURIComponent(deviceId)}`
+    : `${SPOTIFY_API}/me/player/${action}`;
   const res = await spotifyFetch(url, token, { method: 'PUT' });
-  return res.ok || res.status === 204;
+  return isOkOrNoContent(res);
 }
 
-export async function play(token: string, deviceId?: string): Promise<boolean> {
-  if (token === MOCK_TOKEN) return true;
-  const url = deviceId
-    ? `${SPOTIFY_API}/me/player/play?device_id=${encodeURIComponent(deviceId)}`
-    : `${SPOTIFY_API}/me/player/play`;
-  const res = await spotifyFetch(url, token, { method: 'PUT' });
-  return res.ok || res.status === 204;
+export function pause(token: string, deviceId?: string): Promise<boolean> {
+  return setPlaybackState('pause', token, deviceId);
+}
+
+export function play(token: string, deviceId?: string): Promise<boolean> {
+  return setPlaybackState('play', token, deviceId);
 }
 
 export async function findDeviceByName(token: string, nameSubstring: string): Promise<string | null> {

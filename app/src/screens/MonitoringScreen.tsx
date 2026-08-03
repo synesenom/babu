@@ -7,25 +7,21 @@ import {
   ScrollView,
   SafeAreaView,
 } from 'react-native';
-import Constants from 'expo-constants';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { useRoutine } from '../hooks/useRoutine';
 import type { RoutineStatus } from '../lib/types';
+import ErrorBanner from '../components/ErrorBanner';
+import { CLIENT_ID } from '../lib/config';
+import { colors, sharedStyles } from '../lib/theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Monitoring'>;
 
-const extra = Constants.expoConfig?.extra as {
-  spotifyClientId?: string;
-} | undefined;
-
-const CLIENT_ID = extra?.spotifyClientId ?? '';
-
 const STATUS_COLORS: Record<RoutineStatus, string> = {
-  idle: '#8b949e',
-  running: '#388bfd',
-  transitioning: '#e3b341',
-  done: '#3fb950',
+  idle: colors.muted,
+  running: colors.accent,
+  transitioning: colors.warning,
+  done: colors.success,
 };
 
 export default function MonitoringScreen({ route, navigation }: Props) {
@@ -112,9 +108,7 @@ export default function MonitoringScreen({ route, navigation }: Props) {
         )}
 
         {error && !errorDismissed && (
-          <TouchableOpacity style={styles.errorBanner} onPress={() => setErrorDismissed(true)}>
-            <Text style={styles.errorText}>{error}</Text>
-          </TouchableOpacity>
+          <ErrorBanner message={error} onPress={() => setErrorDismissed(true)} style={styles.errorBanner} />
         )}
 
         <TouchableOpacity testID="stop-button" style={styles.stopButton} onPress={handleStop}>
@@ -126,10 +120,7 @@ export default function MonitoringScreen({ route, navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: '#0d1117',
-  },
+  safe: sharedStyles.safe,
   scroll: {
     padding: 24,
     paddingBottom: 48,
@@ -228,16 +219,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   errorBanner: {
-    backgroundColor: '#3d1d1d',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#f85149',
-    padding: 12,
     marginBottom: 16,
-  },
-  errorText: {
-    color: '#f85149',
-    fontSize: 14,
   },
   stopButton: {
     backgroundColor: '#21262d',

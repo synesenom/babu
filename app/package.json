@@ -11,7 +11,6 @@
     "expo-auth-session": "~56.0.13",
     "expo-constants": "^56.0.17",
     "expo-secure-store": "~56.0.4",
-    "expo-status-bar": "~56.0.4",
     "expo-web-browser": "~56.0.5",
     "react": "19.2.3",
     "react-native": "0.85.3",
@@ -31,8 +30,6 @@
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
-    "ios": "expo run:ios",
-    "web": "expo start --web",
     "test": "jest",
     "test:coverage": "jest --coverage"
   },
