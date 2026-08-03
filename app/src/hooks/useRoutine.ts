@@ -41,6 +41,59 @@ function notificationBody(
   return `${hr} · Keeping the lullaby going`;
 }
 
+// Locks in the transition the first time HR drops below the sleep threshold.
+// Once locked, HR is no longer re-evaluated: a brief blip back above the
+// threshold must not cancel the switch to white noise.
+function shouldLockTransition(
+  monitorOnly: boolean,
+  alreadyTransitioning: boolean,
+  heartRate: number | null,
+): boolean {
+  return (
+    !monitorOnly && !alreadyTransitioning && heartRate !== null && heartRate < HR_THRESHOLD
+  );
+}
+
+// The switch to white noise is due when ANY of these holds, and once due it
+// stays due:
+//   nothing is playing, or playback is paused — there is no track left to
+//   wind down, and a paused player would hold remaining_seconds steady
+//   forever;
+//   the current track is inside the tail window — the normal, clean case:
+//   white noise starts before the playlist auto-advances;
+//   a boundary passed between two polls (the playlist advanced to another
+//   track, or the same one restarted and the position jumped backwards).
+//   The tail was missed; switching now costs a few seconds of a fresh
+//   nocturne, which beats waiting for a window we may never see.
+function isSwitchDue(
+  playback: SpotifyPlayback | null,
+  previous: { trackName: string; remainingSeconds: number } | null,
+  remainingSeconds: number | null,
+): boolean {
+  const nothingToWaitFor = playback === null || !playback.is_playing;
+  const inTail = remainingSeconds !== null && remainingSeconds <= TRANSITION_TAIL_SECONDS;
+  const boundaryMissed =
+    playback !== null &&
+    previous !== null &&
+    (playback.track_name !== previous.trackName ||
+      playback.remaining_seconds > previous.remainingSeconds + 1);
+  return nothingToWaitFor || inTail || boundaryMissed;
+}
+
+// Starts the white-noise playlist on the named device. Throws if white noise
+// did not actually start — the caller must never report "done" on a switch
+// that silently did nothing.
+async function startWhiteNoise(accessToken: string, deviceName: string): Promise<void> {
+  const deviceId = await findDeviceByName(accessToken, deviceName);
+  if (!deviceId) {
+    throw new Error(`Spotify device "${deviceName}" not found — cannot start white noise`);
+  }
+  const started = await startPlaylist(accessToken, WHITENOISE_PLAYLIST, deviceId);
+  if (!started) {
+    throw new Error('Spotify would not start the white-noise playlist');
+  }
+}
+
 const initialState: RoutineState = {
   status: 'idle',
   lastReading: null,
@@ -129,14 +182,7 @@ export function useRoutine(
   // is indistinguishable from the transition never happening. Throwing keeps the
   // routine in "transitioning", surfaces the reason, and lets the next poll retry.
   const completeTransition = useCallback(async (accessToken: string) => {
-    const deviceId = await findDeviceByName(accessToken, deviceName);
-    if (!deviceId) {
-      throw new Error(`Spotify device "${deviceName}" not found — cannot start white noise`);
-    }
-    const started = await startPlaylist(accessToken, WHITENOISE_PLAYLIST, deviceId);
-    if (!started) {
-      throw new Error('Spotify would not start the white-noise playlist');
-    }
+    await startWhiteNoise(accessToken, deviceName);
     clearPolling();
     // Only now: while a failed switch is still retrying, the routine still needs
     // the OS to leave it alone.
@@ -169,12 +215,7 @@ export function useRoutine(
       // Lock in the transition the first time HR drops below the sleep threshold.
       // Once locked, HR is no longer re-evaluated: a brief blip back above the
       // threshold must not cancel the switch to white noise.
-      if (
-        !monitorOnly &&
-        !transitionRef.current &&
-        reading.heart_rate !== null &&
-        reading.heart_rate < HR_THRESHOLD
-      ) {
+      if (shouldLockTransition(monitorOnly, transitionRef.current, reading.heart_rate)) {
         transitionRef.current = true;
         dispatch({ type: 'TRANSITIONING' });
       }
@@ -208,30 +249,13 @@ export function useRoutine(
         // starts" bug. Ticks slower than the poll interval are skipped by the
         // in-flight guard, so missing the window is routine, not exceptional.
         //
-        // So the switch is due when ANY of these holds, and once due it stays due:
+        // The switch is due when isSwitchDue() holds, and once due it stays due:
         const previous = lastPlaybackRef.current;
         lastPlaybackRef.current = playback
           ? { trackName: playback.track_name, remainingSeconds: playback.remaining_seconds }
           : null;
 
-        //   nothing is playing, or playback is paused — there is no track left to
-        //   wind down, and a paused player would hold remaining_seconds steady
-        //   forever;
-        const nothingToWaitFor = playback === null || !playback.is_playing;
-        //   the current track is inside the tail window — the normal, clean case:
-        //   white noise starts before the playlist auto-advances;
-        const inTail = remainingSeconds !== null && remainingSeconds <= TRANSITION_TAIL_SECONDS;
-        //   a boundary passed between two polls (the playlist advanced to another
-        //   track, or the same one restarted and the position jumped backwards).
-        //   The tail was missed; switching now costs a few seconds of a fresh
-        //   nocturne, which beats waiting for a window we may never see.
-        const boundaryMissed =
-          playback !== null &&
-          previous !== null &&
-          (playback.track_name !== previous.trackName ||
-            playback.remaining_seconds > previous.remainingSeconds + 1);
-
-        if (nothingToWaitFor || inTail || boundaryMissed) {
+        if (isSwitchDue(playback, previous, remainingSeconds)) {
           switchDueRef.current = true;
         }
 
