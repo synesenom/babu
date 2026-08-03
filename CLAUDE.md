@@ -120,6 +120,17 @@ This project follows strict TDD. For every unit of code:
 
 Never write implementation code that does not have a corresponding test written first. If you are asked to implement a feature, write the test file first, confirm it fails (`cd app && npm test -- <file> --no-coverage`), then implement.
 
+This applies to every change, including ones that look too small or too obvious to test. The regression tests in `useRoutine.test.ts` exist because several "obvious" playback-timing fixes were wrong in ways only a test caught.
+
+### Working from issues
+
+Planned work lives in GitHub issues, grouped into milestones — there is no plan file in the repository. Each issue carries its own **TDD** section naming the test file and the cases to write, and an **Acceptance** section. Treat both as the specification:
+
+- Write the named test file first. If a case in it cannot be expressed against the interface you are building, that is a signal the interface is wrong — fix the interface, do not drop the case.
+- An issue is not done until every acceptance criterion is met and the full suite passes, not just the file you touched.
+
+`/resolve <issue-number>` runs the whole loop: research, plan, implement, validate.
+
 ---
 
 ## Common tasks
