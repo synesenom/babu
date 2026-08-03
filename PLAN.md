@@ -33,6 +33,27 @@ Yoto differs from Spotify in two ways that shape the design:
 Two unknowns must be closed before any Yoto code is written, hence the two spikes in
 Phase 0: the exact REST/auth surface, and whether an MQTT client is viable under Hermes.
 
+## Prerequisite: the content has to exist first
+
+The routine plays content that is already in the family library — it does not create it.
+Before any of this can be configured there must be:
+
+- a **lullaby playlist** — Chopin's compositions are public domain, but *recordings* are
+  not, so the audio needs to come from a public-domain or CC source
+  ([Musopen](https://musopen.org/) hosts a complete Chopin collection), a DRM-free
+  purchase, or a CD rip. Upload it as a Make Your Own playlist in the Yoto app.
+- a **white-noise target** — either Yoto's free in-app Sleep Sounds, if Step 1 confirms
+  they are API-addressable, or a MYO playlist containing the same audio.
+
+Neither needs to be linked to a physical card. Both appear in `GET /content/mine` with a
+`cardId`, which is what the app config stores.
+
+Yoto's API can also create playlists programmatically — request an upload URL from
+`/media/transcode/audio/uploadUrl`, `PUT` the file, poll
+`/media/upload/{uploadId}/transcoded`, then `POST /content`. That is deliberately **out
+of scope**: this is a one-time setup better done in the Yoto app than built into a
+bedtime monitor.
+
 ## The one hard constraint
 
 **Players cannot be powered on remotely.** Playback commands have no effect while the
