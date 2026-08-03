@@ -1,4 +1,4 @@
-import type { SpotifyDevice, SpotifyPlayback, SpotifyTokens } from './types';
+import type { SpotifyAccessToken, SpotifyDevice, SpotifyDeviceId, SpotifyPlayback, SpotifyTokens } from './types';
 import { MOCK_TOKEN } from './constants';
 
 const SPOTIFY_API = 'https://api.spotify.com/v1';
@@ -10,7 +10,7 @@ export class SpotifyError extends Error {
   }
 }
 
-async function spotifyFetch(url: string, token: string, options: RequestInit = {}): Promise<Response> {
+async function spotifyFetch(url: string, token: SpotifyAccessToken, options: RequestInit = {}): Promise<Response> {
   const res = await fetch(url, {
     ...options,
     headers: {
@@ -22,7 +22,7 @@ async function spotifyFetch(url: string, token: string, options: RequestInit = {
   return res;
 }
 
-export async function getDevices(token: string): Promise<SpotifyDevice[]> {
+export async function getDevices(token: SpotifyAccessToken): Promise<SpotifyDevice[]> {
   if (token === MOCK_TOKEN) return [];
   const res = await spotifyFetch(`${SPOTIFY_API}/me/player/devices`, token);
   if (!res.ok) {
@@ -38,24 +38,15 @@ export async function getDevices(token: string): Promise<SpotifyDevice[]> {
   }));
 }
 
-export async function getCurrentPlayback(token: string): Promise<SpotifyPlayback | null> {
-  if (token === MOCK_TOKEN) return null;
-  const res = await spotifyFetch(`${SPOTIFY_API}/me/player`, token);
-  if (res.status === 204) return null;
-  if (!res.ok) {
-    throw new SpotifyError(res.status, `getCurrentPlayback failed: ${res.status}`);
-  }
-  const playback = await res.json();
-  if (!playback || !playback.item) return null;
-
-  const track = playback.item;
-  const progressMs: number = playback.progress_ms ?? 0;
-  const durationMs: number = track.duration_ms ?? 0;
+function toPlayback(playback: Record<string, unknown>): SpotifyPlayback {
+  const track = playback.item as Record<string, unknown>;
+  const progressMs: number = (playback.progress_ms as number) ?? 0;
+  const durationMs: number = (track.duration_ms as number) ?? 0;
   const remainingMs = durationMs - progressMs;
 
   return {
-    is_playing: playback.is_playing ?? false,
-    track_name: track.name ?? 'Unknown',
+    is_playing: (playback.is_playing as boolean) ?? false,
+    track_name: (track.name as string) ?? 'Unknown',
     artist_name: ((track.artists ?? []) as Array<{ name: string }>).map((a) => a.name).join(', '),
     album_name: (track.album as { name?: string })?.name ?? 'Unknown',
     progress_ms: progressMs,
@@ -67,7 +58,20 @@ export async function getCurrentPlayback(token: string): Promise<SpotifyPlayback
   };
 }
 
-export async function getRemainingSeconds(token: string): Promise<number | null> {
+export async function getCurrentPlayback(token: SpotifyAccessToken): Promise<SpotifyPlayback | null> {
+  if (token === MOCK_TOKEN) return null;
+  const res = await spotifyFetch(`${SPOTIFY_API}/me/player`, token);
+  if (res.status === 204) return null;
+  if (!res.ok) {
+    throw new SpotifyError(res.status, `getCurrentPlayback failed: ${res.status}`);
+  }
+  const playback = await res.json();
+  if (!playback || !playback.item) return null;
+
+  return toPlayback(playback);
+}
+
+export async function getRemainingSeconds(token: SpotifyAccessToken): Promise<number | null> {
   const playback = await getCurrentPlayback(token);
   return playback ? playback.remaining_seconds : null;
 }
@@ -76,7 +80,7 @@ function isOkOrNoContent(res: Response): boolean {
   return res.ok || res.status === 204;
 }
 
-export async function startPlaylist(token: string, playlistUri: string, deviceId: string): Promise<boolean> {
+export async function startPlaylist(token: SpotifyAccessToken, playlistUri: string, deviceId: SpotifyDeviceId): Promise<boolean> {
   if (token === MOCK_TOKEN) return true;
   const url = `${SPOTIFY_API}/me/player/play?device_id=${encodeURIComponent(deviceId)}`;
   const res = await spotifyFetch(url, token, {
@@ -86,7 +90,7 @@ export async function startPlaylist(token: string, playlistUri: string, deviceId
   return isOkOrNoContent(res);
 }
 
-async function setPlaybackState(action: 'play' | 'pause', token: string, deviceId?: string): Promise<boolean> {
+async function setPlaybackState(action: 'play' | 'pause', token: SpotifyAccessToken, deviceId?: SpotifyDeviceId): Promise<boolean> {
   if (token === MOCK_TOKEN) return true;
   const url = deviceId
     ? `${SPOTIFY_API}/me/player/${action}?device_id=${encodeURIComponent(deviceId)}`
@@ -95,15 +99,15 @@ async function setPlaybackState(action: 'play' | 'pause', token: string, deviceI
   return isOkOrNoContent(res);
 }
 
-export function pause(token: string, deviceId?: string): Promise<boolean> {
+export function pause(token: SpotifyAccessToken, deviceId?: SpotifyDeviceId): Promise<boolean> {
   return setPlaybackState('pause', token, deviceId);
 }
 
-export function play(token: string, deviceId?: string): Promise<boolean> {
+export function play(token: SpotifyAccessToken, deviceId?: SpotifyDeviceId): Promise<boolean> {
   return setPlaybackState('play', token, deviceId);
 }
 
-export async function findDeviceByName(token: string, nameSubstring: string): Promise<string | null> {
+export async function findDeviceByName(token: SpotifyAccessToken, nameSubstring: string): Promise<string | null> {
   if (token === MOCK_TOKEN) return 'mock-device-id';
   const devices = await getDevices(token);
   const match = devices.find((d) =>
