@@ -22,11 +22,25 @@ Yoto differs from Spotify in two ways that shape the design:
   caches the latest event, and `getPlayback()` reads that cache rather than making a
   network round trip. The routine keeps polling on `POLL_INTERVAL_MS` — it just reads a
   fresher local value.
-- **Lullaby and white noise are chapters of one card**, not two playlists. The Yoto
-  config is `cardId` + a `chapterKey` for each of the two roles.
+- **A physical card is not required.** Yoto cards are NFC keys holding a card ID; the
+  audio itself lives on Yoto's servers. `card/start` takes a **card URI**
+  (`https://yoto.io/<cardId>`), so any content in the family library — including the
+  free in-app sleep sounds — can be streamed to the player with nothing in the slot.
+  The Yoto config is therefore **two content targets**, one per role, each
+  `{ uri, chapterKey?, trackKey? }`. That covers two chapters of one card, two separate
+  cards, or card-free app content, without the routine caring which.
 
 Two unknowns must be closed before any Yoto code is written, hence the two spikes in
 Phase 0: the exact REST/auth surface, and whether an MQTT client is viable under Hermes.
+
+## The one hard constraint
+
+**Players cannot be powered on remotely.** Playback commands have no effect while the
+player is off or disconnected — it has to be woken by a button press or a card
+insertion. For a routine that runs unattended all night, this is the difference between
+the feature working and silently doing nothing, so Step 1 must establish whether a Yoto
+Mini left on the charger stays connected through the night, and what the backend should
+do when it finds the player offline.
 
 ## Verified reference points
 
@@ -48,7 +62,10 @@ listed here is unverified and belongs to Step 1 or Step 2.
 | MQTT client ID | `DASH{deviceId}` |
 | Connection options | `ALPNProtocols: ["x-amzn-mqtt-ca"]` |
 | Idle timeout | ~5 min — publish an events request every 4 m 55 s |
-| Command topics | `card/start` (`chapterKey`, `trackKey`, `secondsIn`, `cutOff`, `anyButtonStop`), `card/pause`, `card/resume`, `card/stop`, `volume/set` |
+| Command topics | `card/start`, `card/pause`, `card/resume`, `card/stop`, `volume/set`, `ambients/set`, `sleep-timer/set` |
+| `card/start` payload | `uri` (required, `https://yoto.io/<cardId>`), `chapterKey`, `trackKey`, `secondsIn`, `cutOff`, `anyButtonStop` |
+| Physical card | Not required — content streams from the library to an awake player |
+| Remote power-on | **Not possible** — commands are ignored while the player is off or disconnected |
 | Event fields | `cardId`, `chapterKey`, `chapterTitle`, `trackKey`, `trackTitle`, `position`, `trackLength`, `playbackStatus`, `sleepTimerActive` |
 | Status fields | `batteryLevel`, `playingStatus`, `volume` |
 
@@ -70,11 +87,16 @@ Research only, no runtime code. Register a developer app at
   `GET /device-v2/{deviceId}/status`, and `GET /card/family/library`.
 - How to enumerate a card's chapters (`GET /content/{cardId}` or equivalent) and what
   a `chapterKey` looks like in practice (`"01"`, `"02"`, …).
+- Whether the free in-app sleep sounds (white / pink / brown noise) appear in
+  `GET /card/family/library` with their own card IDs, or need to be linked to a
+  Make Your Own card first.
+- **Player availability overnight:** whether a Mini left on the charger stays connected
+  to MQTT all night, how long it takes to drop off after the last playback, and whether
+  anything short of a physical button press brings it back.
 - Rate limits and anything in the terms of service that affects a hobby app.
 
 **Deliverable:** `docs/yoto-api-notes.md` with confirmed URLs, headers, sample JSON
-responses (credentials redacted), and the `cardId` / `chapterKey` values for the
-family's Chopin + white-noise card.
+responses (credentials redacted), and the card URIs and chapter keys for both roles.
 
 **Acceptance:** every URL and field name used in Steps 6–10 traces back to this file.
 
@@ -249,8 +271,20 @@ drop schedules a reconnect.
 ### Step 10 — `YotoPlayer` adapter
 
 New `app/src/lib/yotoPlayer.ts` implementing `PlayerBackend` over Steps 7–9.
-Constructor takes `{ tokens, deviceId, cardId, lullabyChapter, whiteNoiseChapter,
-clientId }`.
+Constructor takes `{ tokens, deviceId, lullaby, whiteNoise, clientId }`, where each
+role is a content target:
+
+```ts
+export interface YotoTarget {
+  uri: string;            // https://yoto.io/<cardId>
+  chapterKey?: string;
+  trackKey?: string;
+}
+```
+
+The two roles are independent, so this covers two chapters of one card, two separate
+cards, or card-free app content such as the free sleep sounds — the adapter does not
+care which.
 
 - `connect()` → MQTT connect + subscribe; caches the latest event.
 - `getPlayback()` → maps the cached event to `PlaybackState`;
@@ -259,18 +293,25 @@ clientId }`.
   event has arrived yet or `playbackStatus === 'stopped'` — which makes the routine's
   existing `remaining_seconds === null` branch restart the lullaby, exactly as it does
   for a silent Spotify device.
-- `playLullaby()` / `playWhiteNoise()` → publish `card/start` with the card ID and the
-  matching `chapterKey`.
+- `playLullaby()` / `playWhiteNoise()` → publish `card/start` with that role's `uri`
+  and, when set, its `chapterKey` / `trackKey`.
 - `dispose()` → disconnect.
 
 **Test first:** `app/src/lib/__tests__/yotoPlayer.test.ts` with a fake transport —
-assert the published topic and payload for each role, the event → `PlaybackState`
-mapping, and the stale/absent-event null cases.
+assert the published topic and payload for each role (including a target with no
+`chapterKey`, which must omit the field rather than send `undefined`), the event →
+`PlaybackState` mapping, and the stale/absent-event null cases.
+
+**Offline players.** Since a player cannot be powered on remotely, a command published
+to a sleeping player is silently dropped. `connect()` should check `getPlayers()` for
+the device's `online` flag and fail loudly if it is off, and `getPlayback()` should
+distinguish "no event yet because the player is offline" from "nothing playing" — the
+latter restarts the lullaby, the former must surface an error. Getting this wrong means
+a night of silence with the UI showing `running`.
 
 **Open question for Step 1 to answer:** whether `card/start` works when a *different*
-physical card is inserted, and what happens if the card is ejected mid-routine. If a
-foreign card blocks playback, `getPlayback()` should surface that as an error rather
-than silently doing nothing.
+physical card is inserted, and what happens if a card is ejected mid-routine. If a
+foreign card blocks playback, `getPlayback()` should surface that as an error too.
 
 ---
 
@@ -284,24 +325,32 @@ section renders only for `spotify`, the Yoto section only for `yoto`. Owlet and 
 sections are untouched.
 
 `Start Routine` stays disabled until the selected backend is fully configured — for
-Yoto that means connected **and** a device, card, and both chapters chosen.
+Yoto that means connected **and** a player plus a content target chosen for each of the
+two roles.
 
 **Test first:** a new `app/src/screens/__tests__/SetupScreen.test.tsx` — switching the
 picker swaps which section renders, the choice survives a remount, and the start button
 gating is correct per backend.
 
-### Step 12 — Yoto connect and card/chapter pickers
+### Step 12 — Yoto connect and content pickers
 
 Inside the Yoto section: a "Connect Yoto" button driving `useYotoAuth`, then, once
-connected, three pickers populated from `yotoApi` — player, card, and a chapter each for
-lullaby and white noise. Selections persist to `SecureStore`.
+connected, a player picker plus **two independent content pickers** — one for the
+lullaby role, one for white noise. Each is a card picker (from `getLibrary()`) with an
+optional chapter picker (from `getCardChapters()`) that appears only when the chosen
+card has more than one chapter. Selections persist to `SecureStore` as `YotoTarget`s.
 
-Chapter pickers are populated from `getCardChapters(cardId)` and reset when the card
-changes. Show a clear inline error when the account has no players or the card has fewer
-than two chapters.
+The two roles are independent by design: the family's current setup has Chopin and white
+noise as two chapters of one card, but a user may equally point white noise at the free
+in-app brown-noise content and the lullaby at a different card. Both must work.
+
+Show a clear inline error when the account has no players. Do **not** require the card
+to have two chapters — a single-chapter card is valid for a role.
 
 **Test first:** extend `SetupScreen.test.tsx` with mocked `yotoApi` — pickers populate,
-changing the card refetches and resets chapters, and persisted selections are restored.
+changing a card refetches and resets that role's chapter only, a single-chapter card
+hides the chapter picker and stores a target with no `chapterKey`, the two roles can
+hold different cards, and persisted selections are restored.
 
 ### Step 13 — Navigation and `MonitoringScreen`
 
@@ -373,6 +422,7 @@ Spotify and Yoto flows green.
 | MQTT unusable under Hermes | Step 2 spikes it before any dependent work; hand-rolled WS client is the fallback |
 | Single-use refresh tokens strand an overnight run | Step 7 persists the rotated token before returning and clears on failure; explicitly tested |
 | Broker drops the connection mid-night | Keepalive under the 5-minute idle window plus reconnect-with-backoff in Step 9 |
+| Player asleep or offline — commands silently dropped, no remote power-on | Step 1 measures overnight availability; Step 10 fails loudly on an offline player instead of showing `running` over silence |
 | Physical card ejected or swapped mid-routine | Step 1 determines the behaviour; Step 10 surfaces it as an error |
 | Unofficial-API drift | Yoto's API is first-party and documented, so lower risk than the Owlet chain; pin nothing to undocumented fields |
 | Scope creep into volume/lights/sleep timer | `PlayerBackend` stays minimal; extras are follow-up work, not part of this plan |
@@ -392,7 +442,7 @@ Spotify and Yoto flows green.
 | 9 | `yotoMqtt.ts` (transport) | #35 | #29, #33 | |
 | 10 | `YotoPlayer` adapter | #37 | #28, #34, #35 | |
 | 11 | Player selection in `SetupScreen` | #36 | #32 | |
-| 12 | Yoto connect and card/chapter pickers | #38 | #34, #36 | |
+| 12 | Yoto connect and content pickers | #38 | #34, #36 | |
 | 13 | Navigation and `MonitoringScreen` | #39 | #36, #37 | |
 | 14 | Mock mode for Yoto | #40 | #38, #39 | |
 | 15 | E2E flow for the Yoto path | #41 | #40 | |
