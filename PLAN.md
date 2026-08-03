@@ -87,9 +87,17 @@ Research only, no runtime code. Register a developer app at
   `GET /device-v2/{deviceId}/status`, and `GET /card/family/library`.
 - How to enumerate a card's chapters (`GET /content/{cardId}` or equivalent) and what
   a `chapterKey` looks like in practice (`"01"`, `"02"`, …).
+- That an **unlinked MYO playlist** is addressable: `GET /content/mine` returns MYO
+  items with a `cardId` even when no physical card is linked, and
+  `GET /content/{cardId}` returns its chapters. Confirm that `cardId` works as
+  `https://yoto.io/<cardId>` in a `card/start` payload — this is what makes the
+  card-free setup work at all.
 - Whether the free in-app sleep sounds (white / pink / brown noise) appear in
-  `GET /card/family/library` with their own card IDs, or need to be linked to a
-  Make Your Own card first.
+  `GET /card/family/library` or `GET /content/mine` with their own card IDs, or need to
+  be linked to a Make Your Own playlist first.
+- Whether `card/start` on a multi-chapter playlist auto-advances through the chapters
+  and then stops, and whether `card/resume` resumes in place — see the restart-semantics
+  note in Step 10.
 - **Player availability overnight:** whether a Mini left on the charger stays connected
   to MQTT all night, how long it takes to drop off after the last playback, and whether
   anything short of a physical button press brings it back.
@@ -301,6 +309,16 @@ care which.
 assert the published topic and payload for each role (including a target with no
 `chapterKey`, which must omit the field rather than send `undefined`), the event →
 `PlaybackState` mapping, and the stale/absent-event null cases.
+
+**Restart semantics.** The routine's "keep the lullaby alive" branch calls
+`playLullaby()` whenever the current track is ending or nothing is playing. On Spotify
+that re-issues the playlist context. On Yoto, a bare `card/start` restarts the playlist
+**from the top**, so a multi-chapter Chopin playlist would replay its first nocturne all
+evening. `playLullaby()` must therefore be position-aware: when the cached event shows
+the player paused or mid-playlist, prefer `card/resume`, or re-issue `card/start` with
+the current `chapterKey` / `trackKey` and `secondsIn`. Only a genuine stop-at-the-end
+should restart from the top. Cover this with an explicit test — it is the one place
+where the Spotify-shaped logic does not transfer cleanly.
 
 **Offline players.** Since a player cannot be powered on remotely, a command published
 to a sleeping player is silently dropped. `connect()` should check `getPlayers()` for
