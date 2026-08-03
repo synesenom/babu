@@ -6,6 +6,14 @@ plugins {
 group = 'expo.modules.foregroundservice'
 version = '0.1.0'
 
+dependencies {
+  // expo-modules-core depends on React Native with `implementation`, so its
+  // classes are not on this module's compile classpath. HeadlessJsTaskService
+  // and Arguments come from here — the version is resolved by the React Native
+  // Gradle plugin in the root project, exactly as expo-modules-core declares it.
+  implementation 'com.facebook.react:react-android'
+}
+
 android {
   namespace "expo.modules.foregroundservice"
   defaultConfig {
