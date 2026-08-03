@@ -11,6 +11,13 @@ import {
 import type { Owlet } from '../lib/owlet';
 import { getCurrentPlayback, findDeviceByName, startPlaylist } from '../lib/spotifyApi';
 import { getValidToken } from '../lib/spotifyAuth';
+import {
+  startForegroundService,
+  updateForegroundService,
+  stopForegroundService,
+  addTickListener,
+  type TickSubscription,
+} from '../lib/foregroundService';
 
 type Action =
   | { type: 'START' }
@@ -20,6 +27,19 @@ type Action =
   | { type: 'TRANSITIONING' }
   | { type: 'DONE' }
   | { type: 'ERROR'; payload: string };
+
+// Text for the ongoing notification. Leads with the vitals so the routine can be
+// checked from the lock screen without opening the app.
+function notificationBody(
+  reading: OwletReading,
+  transitioning: boolean,
+  monitorOnly: boolean,
+): string {
+  const hr = reading.heart_rate !== null ? `${reading.heart_rate} BPM` : 'No reading';
+  if (transitioning) return `${hr} · Sleep detected — white noise at the end of the track`;
+  if (monitorOnly) return `${hr} · Monitoring only`;
+  return `${hr} · Keeping the lullaby going`;
+}
 
 const initialState: RoutineState = {
   status: 'idle',
@@ -86,10 +106,17 @@ export function useRoutine(
   // track boundary passed between two polls.
   const lastPlaybackRef = useRef<{ trackName: string; remainingSeconds: number } | null>(null);
 
+  // Set when the native service is driving the loop instead of setInterval.
+  const tickSubscriptionRef = useRef<TickSubscription | null>(null);
+
   const clearPolling = useCallback(() => {
     if (intervalRef.current !== null) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
+    }
+    if (tickSubscriptionRef.current !== null) {
+      tickSubscriptionRef.current.remove();
+      tickSubscriptionRef.current = null;
     }
   }, []);
 
@@ -111,6 +138,9 @@ export function useRoutine(
       throw new Error('Spotify would not start the white-noise playlist');
     }
     clearPolling();
+    // Only now: while a failed switch is still retrying, the routine still needs
+    // the OS to leave it alone.
+    stopForegroundService();
     dispatch({ type: 'DONE' });
   }, [deviceName, clearPolling]);
 
@@ -136,12 +166,11 @@ export function useRoutine(
       const playback = await getCurrentPlayback(accessToken);
       dispatch({ type: 'NOW_PLAYING', payload: playback });
 
-      if (monitorOnly) return;
-
       // Lock in the transition the first time HR drops below the sleep threshold.
       // Once locked, HR is no longer re-evaluated: a brief blip back above the
       // threshold must not cancel the switch to white noise.
       if (
+        !monitorOnly &&
         !transitionRef.current &&
         reading.heart_rate !== null &&
         reading.heart_rate < HR_THRESHOLD
@@ -149,6 +178,13 @@ export function useRoutine(
         transitionRef.current = true;
         dispatch({ type: 'TRANSITIONING' });
       }
+
+      // Keep the ongoing notification in step with the routine. While the app is
+      // backgrounded this is the only visible sign that polling is still alive —
+      // if the text stops advancing, the OS has frozen the loop.
+      updateForegroundService(notificationBody(reading, transitionRef.current, monitorOnly));
+
+      if (monitorOnly) return;
 
       // `remaining_seconds` is a live query against Spotify made on THIS tick, so
       // it reflects the track's real position right now.
@@ -235,12 +271,52 @@ export function useRoutine(
     switchingRef.current = false;
     switchDueRef.current = false;
     lastPlaybackRef.current = null;
+    // Android freezes JS timers for a backgrounded app (Doze, or an OEM
+    // background killer), which would stop the polling loop the moment the phone
+    // is put down — and with it the transition. A foreground service keeps the
+    // process alive and out of Doze for as long as the routine runs. Fire and
+    // forget: if it cannot start, the routine still runs while the app is on
+    // screen, which is strictly what it did before.
     dispatch({ type: 'START' });
-    intervalRef.current = setInterval(tick, pollIntervalMs);
+
+    const startInterval = () => {
+      if (intervalRef.current === null) {
+        intervalRef.current = setInterval(tick, pollIntervalMs);
+      }
+    };
+
+    // Prefer the service's own tick stream. React Native drops its timer
+    // callback in onHostPause, so a setInterval here stops the moment the app
+    // leaves the screen — the native loop runs on the main looper under the
+    // service's wake lock and keeps firing with the screen off. The interval
+    // stays as the fallback wherever the native service does not exist.
+    const subscription = addTickListener(() => {
+      void tick();
+    });
+    if (subscription) {
+      tickSubscriptionRef.current = subscription;
+    } else {
+      startInterval();
+    }
+
+    void startForegroundService('Babu', 'Starting the bedtime routine…', pollIntervalMs).then(
+      (running) => {
+        // Subscribed to a tick stream that will never emit — the module is
+        // present but the service did not start. Polling nothing at all is worse
+        // than not having the service, so take the interval after all.
+        // A null subscription here means stop() already ran; leave it stopped.
+        if (!running && tickSubscriptionRef.current !== null) {
+          tickSubscriptionRef.current.remove();
+          tickSubscriptionRef.current = null;
+          startInterval();
+        }
+      },
+    );
   }, [tick, pollIntervalMs]);
 
   const stop = useCallback(() => {
     clearPolling();
+    stopForegroundService();
     transitionRef.current = false;
     switchingRef.current = false;
     switchDueRef.current = false;
@@ -251,6 +327,9 @@ export function useRoutine(
   useEffect(() => {
     return () => {
       clearPolling();
+      // The service exists to protect this loop; if the loop is gone, so is its
+      // reason to hold the process open.
+      stopForegroundService();
     };
   }, [clearPolling]);
 

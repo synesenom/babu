@@ -2,6 +2,7 @@ import { renderHook, act } from '@testing-library/react-native';
 import { useRoutine } from '../useRoutine';
 import * as spotifyApi from '../../lib/spotifyApi';
 import * as spotifyAuth from '../../lib/spotifyAuth';
+import * as foregroundService from '../../lib/foregroundService';
 import { POLL_INTERVAL_MS, WHITENOISE_PLAYLIST, CHOPIN_PLAYLIST } from '../../lib/constants';
 import type { OwletReading, SpotifyTokens, SpotifyPlayback } from '../../lib/types';
 import type { Owlet } from '../../lib/owlet';
@@ -9,11 +10,16 @@ import type { Owlet } from '../../lib/owlet';
 jest.mock('../../lib/owlet');
 jest.mock('../../lib/spotifyApi');
 jest.mock('../../lib/spotifyAuth');
+jest.mock('../../lib/foregroundService');
 
 const mockGetCurrentPlayback = spotifyApi.getCurrentPlayback as jest.Mock;
 const mockFindDeviceByName = spotifyApi.findDeviceByName as jest.Mock;
 const mockStartPlaylist = spotifyApi.startPlaylist as jest.Mock;
 const mockGetValidToken = spotifyAuth.getValidToken as jest.Mock;
+const mockStartService = foregroundService.startForegroundService as jest.Mock;
+const mockUpdateService = foregroundService.updateForegroundService as jest.Mock;
+const mockStopService = foregroundService.stopForegroundService as jest.Mock;
+const mockAddTickListener = foregroundService.addTickListener as jest.Mock;
 
 const DEFAULT_READING: OwletReading = {
   heart_rate: 120,
@@ -84,6 +90,7 @@ beforeEach(() => {
   mockFindDeviceByName.mockResolvedValue('dev1');
   mockStartPlaylist.mockResolvedValue(true);
   mockGetValidToken.mockResolvedValue('refreshed-access-token');
+  mockStartService.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -157,11 +164,11 @@ it('after HR drops below threshold, stays transitioning until a live poll shows 
     result.current.start();
   });
 
-  await advanceInterval(); // poll 1: HR 90 locks in the transition; track has 12s left → wait
+  await advanceInterval(); // poll 1: HR 90 locks in the transition; track has 30s left → wait
   expect(result.current.state.status).toBe('transitioning');
   expect(mockStartPlaylist).not.toHaveBeenCalled();
 
-  await advanceInterval(); // poll 2: 7s left → still wait
+  await advanceInterval(); // poll 2: 18s left → still outside the tail window
   expect(result.current.state.status).toBe('transitioning');
   expect(mockStartPlaylist).not.toHaveBeenCalled();
 
@@ -796,4 +803,266 @@ it('switches on the live track tail, never bleeding into an auto-advanced next C
     CHOPIN_PLAYLIST,
     expect.anything(),
   );
+});
+
+// ---------------------------------------------------------------------------
+// 16. Android foreground service. Without one the OS is free to freeze the JS
+//     timers (Doze, or an OEM background killer) as soon as the app leaves the
+//     foreground or the screen goes off, so the routine silently stops polling
+//     and the transition never happens. The routine owns the service lifetime:
+//     it starts with the polling and stops when the polling stops.
+// ---------------------------------------------------------------------------
+
+it('start() starts the foreground service so the routine survives backgrounding', async () => {
+  const owlet = makeOwlet([{ heart_rate: 120 }]);
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  expect(mockStartService).toHaveBeenCalled();
+});
+
+it('starts the foreground service in monitorOnly mode too', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  const { result } = await renderHook(() =>
+    useRoutine(owlet, MOCK_TOKENS, 'iphone', POLL_INTERVAL_MS, true),
+  );
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  expect(mockStartService).toHaveBeenCalled();
+});
+
+it('updates the notification with the live reading on each tick', async () => {
+  const owlet = makeOwlet([{ heart_rate: 118 }, { heart_rate: 116 }]);
+  mockGetCurrentPlayback.mockResolvedValue(MOCK_PLAYBACK);
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+  expect(mockUpdateService).toHaveBeenLastCalledWith(expect.stringContaining('118'));
+
+  await advanceInterval();
+  expect(mockUpdateService).toHaveBeenLastCalledWith(expect.stringContaining('116'));
+});
+
+it('says the routine is waiting out the track once a transition is locked in', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  mockGetCurrentPlayback.mockResolvedValue({
+    ...MOCK_PLAYBACK,
+    remaining_seconds: 200,
+    remaining_ms: 200000,
+  });
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+
+  expect(result.current.state.status).toBe('transitioning');
+  expect(mockUpdateService).toHaveBeenLastCalledWith(expect.stringMatching(/sleep/i));
+});
+
+it('stops the foreground service once white noise is playing', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  mockGetCurrentPlayback.mockResolvedValue(TRACK_TAIL);
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+
+  expect(result.current.state.status).toBe('done');
+  expect(mockStopService).toHaveBeenCalled();
+});
+
+it('keeps the foreground service alive while a failed switch is still retrying', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  mockGetCurrentPlayback.mockResolvedValue(TRACK_TAIL);
+  mockFindDeviceByName.mockResolvedValue(null);
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+
+  expect(result.current.state.status).toBe('transitioning');
+  expect(mockStopService).not.toHaveBeenCalled();
+});
+
+it('stop() stops the foreground service', async () => {
+  const owlet = makeOwlet([{ heart_rate: 120 }]);
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+  await act(async () => {
+    result.current.stop();
+  });
+
+  expect(mockStopService).toHaveBeenCalled();
+});
+
+it('keeps polling when the foreground service cannot be started', async () => {
+  // A device that refuses the service (permission denied, unsupported OEM) must
+  // still get the in-app routine — it just will not survive backgrounding.
+  mockStartService.mockResolvedValue(false);
+  const owlet = makeOwlet([{ heart_rate: 120 }]);
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+
+  expect(result.current.state.status).toBe('running');
+  expect(result.current.state.lastReading?.heart_rate).toBe(120);
+});
+
+// ---------------------------------------------------------------------------
+// 17. Who drives the poll loop. React Native tears down its timer frame callback
+//     in onHostPause, so a JS setInterval is not a loop that can be relied on
+//     once the app leaves the screen. When the native service offers a tick
+//     stream, the routine is driven by that instead; the interval remains the
+//     fallback for everywhere the native module does not exist.
+// ---------------------------------------------------------------------------
+
+it('is driven by the native tick stream when the foreground service provides one', async () => {
+  let nativeTick: (() => void) | undefined;
+  const remove = jest.fn();
+  mockAddTickListener.mockImplementation((cb: () => void) => {
+    nativeTick = cb;
+    return { remove };
+  });
+
+  const owlet = makeOwlet([{ heart_rate: 120 }]);
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  // No JS interval may be running: advancing timers must poll nothing.
+  await advanceInterval();
+  expect(owlet.read).not.toHaveBeenCalled();
+
+  await act(async () => {
+    nativeTick?.();
+    await new Promise<void>((r) => setImmediate(r));
+  });
+
+  expect(owlet.read).toHaveBeenCalledTimes(1);
+  expect(result.current.state.lastReading?.heart_rate).toBe(120);
+});
+
+it('unsubscribes from the native tick stream on stop', async () => {
+  const remove = jest.fn();
+  mockAddTickListener.mockReturnValue({ remove });
+
+  const owlet = makeOwlet([{ heart_rate: 120 }]);
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+  await act(async () => {
+    result.current.stop();
+  });
+
+  expect(remove).toHaveBeenCalled();
+});
+
+it('falls back to the JS interval when there is no native tick stream', async () => {
+  mockAddTickListener.mockReturnValue(null);
+
+  const owlet = makeOwlet([{ heart_rate: 120 }]);
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+
+  expect(owlet.read).toHaveBeenCalledTimes(1);
+});
+
+it('passes the poll interval to the foreground service so native ticks match it', async () => {
+  const owlet = makeOwlet([{ heart_rate: 120 }]);
+  const { result } = await renderHook(() =>
+    useRoutine(owlet, MOCK_TOKENS, 'iphone', 7000),
+  );
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  expect(mockStartService).toHaveBeenCalledWith(expect.any(String), expect.any(String), 7000);
+});
+
+it('falls back to the JS interval when the service fails to start after subscribing', async () => {
+  // The native module exists (so a subscription is handed out), but the service
+  // never starts — no native tick will ever arrive. Without a fallback the
+  // routine would sit there polling nothing at all, which is worse than having
+  // no service in the first place.
+  const remove = jest.fn();
+  mockAddTickListener.mockReturnValue({ remove });
+  mockStartService.mockResolvedValue(false);
+
+  const owlet = makeOwlet([{ heart_rate: 120 }]);
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+    await new Promise<void>((r) => setImmediate(r));
+  });
+
+  await advanceInterval();
+
+  expect(remove).toHaveBeenCalled();
+  expect(owlet.read).toHaveBeenCalledTimes(1);
+});
+
+it('does not start a JS interval when the service fails but the routine was already stopped', async () => {
+  const remove = jest.fn();
+  mockAddTickListener.mockReturnValue({ remove });
+  let resolveStart!: (ok: boolean) => void;
+  mockStartService.mockReturnValue(new Promise<boolean>((r) => { resolveStart = r; }));
+
+  const owlet = makeOwlet([{ heart_rate: 120 }]);
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+  await act(async () => {
+    result.current.stop();
+  });
+  await act(async () => {
+    resolveStart(false);
+    await new Promise<void>((r) => setImmediate(r));
+  });
+
+  await advanceInterval();
+
+  expect(owlet.read).not.toHaveBeenCalled();
 });
