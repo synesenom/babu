@@ -19,6 +19,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { useSpotifyAuth, loadStoredTokens, saveTokens } from '../lib/spotifyAuth';
 import { Owlet } from '../lib/owlet';
+import VersionLabel from '../components/VersionLabel';
 import type { OwletReading, OwletRegion, SpotifyTokens } from '../lib/types';
 import { MOCK_TOKEN } from '../lib/constants';
 
@@ -267,6 +268,8 @@ export default function SetupScreen({ navigation }: Props) {
               <Text style={styles.startButtonText}>Start Routine</Text>
             )}
           </TouchableOpacity>
+
+          <VersionLabel />
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
