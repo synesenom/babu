@@ -59,6 +59,7 @@ maestro test e2e/        # E2E flows
 | `HR_THRESHOLD` | 120 BPM | Sleep detection threshold |
 | `POLL_INTERVAL_MS` | 5 000 ms | Owlet/Spotify polling interval |
 | `RESTART_THRESHOLD_SECONDS` | 5 s | Restart Chopin if track is ending / nothing playing |
+| `TRANSITION_TAIL_SECONDS` | 12 s (2 × poll + 2) | How close to the track end the white-noise switch may fire |
 | `CHOPIN_PLAYLIST` | `spotify:playlist:5MKaz5wxcypYQLklyx34J2` | Lullaby playlist |
 | `WHITENOISE_PLAYLIST` | `spotify:playlist:4Lj9ZugyG3SNEA9XAxGVwx` | Sleep playlist |
 
@@ -96,7 +97,9 @@ EU region uses separate Firebase/Ayla endpoints (`OWLET_REGIONS` in `constants.t
 idle → running → transitioning → done
 ```
 - `useReducer` for state; polling interval held in a `useRef` so it survives re-renders.
-- Each tick: Owlet read → Spotify playback read → either transition (HR below threshold: wait out remaining track seconds, start white noise) or keep music alive (restart Chopin when `remaining_seconds < RESTART_THRESHOLD_SECONDS` or nothing playing).
+- Each tick: Owlet read → Spotify playback read → either transition (HR below threshold) or keep music alive (restart Chopin when `remaining_seconds < RESTART_THRESHOLD_SECONDS` or nothing playing).
+- Once the transition is locked in, the white-noise switch becomes due on the first tick where **any** of these holds: nothing is playing / playback is paused; the track is within `TRANSITION_TAIL_SECONDS` of ending; or a track boundary passed between two polls (track name changed, or `remaining_seconds` jumped back up). The last one matters — gating only on the tail gives one chance per track, and a tick skipped by the in-flight guard silently costs a whole nocturne. Once due it stays due, so a failed switch retries on the next poll instead of going back to waiting.
+- The switch reports `done` only if white noise actually started; a missing device or a refused play call surfaces as an error and keeps the routine polling.
 - `monitorOnly` flag disables all playback control.
 
 ### Spotify

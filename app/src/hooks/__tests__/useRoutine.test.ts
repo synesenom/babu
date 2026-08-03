@@ -75,7 +75,11 @@ async function advanceInterval(ms: number = POLL_INTERVAL_MS): Promise<void> {
 beforeEach(() => {
   // Keep setImmediate and nextTick real so React / RNTL act() flush mechanisms work.
   jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick'] });
-  jest.clearAllMocks();
+  // resetAllMocks, not clearAllMocks: clearing only wipes recorded calls, so any
+  // mockResolvedValueOnce a test queued but did not consume (a test that ends as
+  // soon as the routine switches leaves the rest of its playback script behind)
+  // survives into the next test and is handed out as its first playback.
+  jest.resetAllMocks();
   mockGetCurrentPlayback.mockResolvedValue(null);
   mockFindDeviceByName.mockResolvedValue('dev1');
   mockStartPlaylist.mockResolvedValue(true);
@@ -143,8 +147,8 @@ it('after one tick with HR 120, status stays running and lastReading.heart_rate 
 it('after HR drops below threshold, stays transitioning until a live poll shows the track tail, then switches to white noise', async () => {
   const owlet = makeOwlet([{ heart_rate: 90 }]);
   mockGetCurrentPlayback
-    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 12, remaining_ms: 12000 })
-    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 7, remaining_ms: 7000 })
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 30, remaining_ms: 30000 })
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 18, remaining_ms: 18000 })
     .mockResolvedValueOnce(TRACK_TAIL);
 
   const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
@@ -466,7 +470,7 @@ it('does not restart Chopin once a transition is in progress, but keeps polling 
     .mockResolvedValue({ ...DEFAULT_READING, heart_rate: 130 });
   const owlet = { read } as unknown as Owlet;
   mockGetCurrentPlayback
-    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 7, remaining_ms: 7000 })
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 25, remaining_ms: 25000 })
     .mockResolvedValue(TRACK_TAIL);
 
   const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
@@ -508,8 +512,8 @@ it('does not restart Chopin once a transition is in progress, but keeps polling 
 it('keeps polling live owlet vitals while a transition waits for the current track to end', async () => {
   const owlet = makeOwlet([{ heart_rate: 90 }, { heart_rate: 85 }, { heart_rate: 80 }]);
   mockGetCurrentPlayback
-    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 20, remaining_ms: 20000 })
-    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 12, remaining_ms: 12000 })
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 45, remaining_ms: 45000 })
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 28, remaining_ms: 28000 })
     .mockResolvedValueOnce(TRACK_TAIL);
 
   const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
@@ -547,6 +551,218 @@ it('keeps polling live owlet vitals while a transition waits for the current tra
 //     the first snapshot fires seconds into the next repeated Chopin track,
 //     because the playlist auto-advances at the boundary — the reported bug.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// 14. The switch must not depend on a poll landing inside a narrow window.
+//     With a 5s poll interval and a 5s tail window there is zero margin: a tick
+//     skipped by the in-flight guard (the Owlet auth chain routinely outruns the
+//     poll interval) or a slow round trip means no poll ever observes the tail,
+//     and the routine sits in "transitioning" through track after track without
+//     ever starting white noise — the reported bug.
+// ---------------------------------------------------------------------------
+
+it('switches when a poll lands in the tail window but outside the old 5s threshold', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  mockGetCurrentPlayback
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 30, remaining_ms: 30000 })
+    .mockResolvedValue({ ...MOCK_PLAYBACK, remaining_seconds: 9, remaining_ms: 9000 });
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval(); // poll 1: transition locked; 30s left → wait
+  expect(result.current.state.status).toBe('transitioning');
+  expect(mockStartPlaylist).not.toHaveBeenCalled();
+
+  // 9s left is inside the tail window: the next poll is not guaranteed to
+  // arrive before the boundary, so this is the last safe chance to switch.
+  await advanceInterval();
+
+  expect(result.current.state.status).toBe('done');
+  expect(mockStartPlaylist).toHaveBeenCalledWith(
+    MOCK_TOKENS.access_token,
+    WHITENOISE_PLAYLIST,
+    'dev1',
+  );
+});
+
+it('switches immediately when the playlist auto-advanced between polls, instead of waiting out another track', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  mockGetCurrentPlayback
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 40, remaining_ms: 40000 })
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 22, remaining_ms: 22000 })
+    // No poll saw the tail — the boundary came and went between polls and a
+    // fresh nocturne is already playing. Waiting for *its* tail risks missing
+    // that one too, forever. Switch now.
+    .mockResolvedValue({
+      ...MOCK_PLAYBACK,
+      track_name: 'Nocturne Op. 27 No. 2',
+      remaining_seconds: 260,
+      remaining_ms: 260000,
+    });
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval(); // poll 1: transition locked; 40s left → wait
+  expect(result.current.state.status).toBe('transitioning');
+
+  await advanceInterval(); // poll 2: 22s left → wait
+  expect(result.current.state.status).toBe('transitioning');
+  expect(mockStartPlaylist).not.toHaveBeenCalled();
+
+  await advanceInterval(); // poll 3: different track → boundary missed → switch now
+
+  expect(result.current.state.status).toBe('done');
+  expect(mockStartPlaylist).toHaveBeenCalledWith(
+    MOCK_TOKENS.access_token,
+    WHITENOISE_PLAYLIST,
+    'dev1',
+  );
+});
+
+it('switches when the same track repeats between polls (remaining_seconds jumps back up)', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  mockGetCurrentPlayback
+    .mockResolvedValueOnce({ ...MOCK_PLAYBACK, remaining_seconds: 35, remaining_ms: 35000 })
+    // Same track name, but the position jumped backwards: a boundary passed
+    // (single-track repeat), so the tail was missed just the same.
+    .mockResolvedValue({ ...MOCK_PLAYBACK, remaining_seconds: 250, remaining_ms: 250000 });
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+  expect(result.current.state.status).toBe('transitioning');
+  expect(mockStartPlaylist).not.toHaveBeenCalled();
+
+  await advanceInterval();
+
+  expect(result.current.state.status).toBe('done');
+  expect(mockStartPlaylist).toHaveBeenCalledWith(
+    MOCK_TOKENS.access_token,
+    WHITENOISE_PLAYLIST,
+    'dev1',
+  );
+});
+
+it('switches immediately when playback is paused while transitioning', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  // Nothing is winding down — a paused player would otherwise hold
+  // remaining_seconds steady forever and the switch would never fire.
+  mockGetCurrentPlayback.mockResolvedValue({
+    ...MOCK_PLAYBACK,
+    is_playing: false,
+    remaining_seconds: 120,
+    remaining_ms: 120000,
+  });
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+
+  expect(result.current.state.status).toBe('done');
+  expect(mockStartPlaylist).toHaveBeenCalledWith(
+    MOCK_TOKENS.access_token,
+    WHITENOISE_PLAYLIST,
+    'dev1',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 15. A switch that did not actually start white noise must not be reported as
+//     done. Silently clearing the poll and navigating to the Done screen while
+//     Chopin (or silence) plays on looks exactly like "it never switched".
+// ---------------------------------------------------------------------------
+
+it('does not report done when the Spotify device cannot be found, and retries on the next poll', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  mockGetCurrentPlayback.mockResolvedValue(TRACK_TAIL);
+  mockFindDeviceByName.mockResolvedValueOnce(null).mockResolvedValue('dev1');
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval(); // poll 1: tail reached, but the device is gone
+
+  expect(result.current.state.status).toBe('transitioning');
+  expect(result.current.state.error).toMatch(/device/i);
+  expect(mockStartPlaylist).not.toHaveBeenCalled();
+
+  await advanceInterval(); // poll 2: device is back → the switch retries
+
+  expect(result.current.state.status).toBe('done');
+  expect(mockStartPlaylist).toHaveBeenCalledWith(
+    MOCK_TOKENS.access_token,
+    WHITENOISE_PLAYLIST,
+    'dev1',
+  );
+});
+
+it('retries a failed switch on the next poll even after the playlist has moved on', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  mockFindDeviceByName.mockResolvedValueOnce(null).mockResolvedValue('dev1');
+  mockGetCurrentPlayback
+    .mockResolvedValueOnce(TRACK_TAIL)
+    // The retry must not go back to waiting for a tail it may never see.
+    .mockResolvedValue({ ...MOCK_PLAYBACK, remaining_seconds: 260, remaining_ms: 260000 });
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval();
+  expect(result.current.state.status).toBe('transitioning');
+
+  await advanceInterval();
+
+  expect(result.current.state.status).toBe('done');
+  expect(mockStartPlaylist).toHaveBeenCalledWith(
+    MOCK_TOKENS.access_token,
+    WHITENOISE_PLAYLIST,
+    'dev1',
+  );
+});
+
+it('does not report done when startPlaylist fails, and retries on the next poll', async () => {
+  const owlet = makeOwlet([{ heart_rate: 90 }]);
+  mockGetCurrentPlayback.mockResolvedValue(TRACK_TAIL);
+  mockStartPlaylist.mockResolvedValueOnce(false).mockResolvedValue(true);
+
+  const { result } = await renderHook(() => useRoutine(owlet, MOCK_TOKENS, 'iphone'));
+
+  await act(async () => {
+    result.current.start();
+  });
+
+  await advanceInterval(); // poll 1: Spotify refuses the play call
+
+  expect(result.current.state.status).toBe('transitioning');
+  expect(result.current.state.error).toBeTruthy();
+
+  await advanceInterval(); // poll 2: retry succeeds
+
+  expect(result.current.state.status).toBe('done');
+  expect(mockStartPlaylist).toHaveBeenCalledTimes(2);
+});
 
 it('switches on the live track tail, never bleeding into an auto-advanced next Chopin track', async () => {
   const owlet = makeOwlet([{ heart_rate: 90 }]);
