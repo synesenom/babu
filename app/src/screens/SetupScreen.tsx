@@ -14,24 +14,25 @@ import {
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import * as SecureStore from 'expo-secure-store';
-import Constants from 'expo-constants';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { useSpotifyAuth, loadStoredTokens, saveTokens } from '../lib/spotifyAuth';
 import { Owlet } from '../lib/owlet';
 import VersionLabel from '../components/VersionLabel';
+import ErrorBanner from '../components/ErrorBanner';
 import type { OwletReading, OwletRegion, SpotifyTokens } from '../lib/types';
 import { MOCK_TOKEN } from '../lib/constants';
+import { CLIENT_ID, MOCK_MODE } from '../lib/config';
+import { colors, sharedStyles } from '../lib/theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Setup'>;
 
-const extra = Constants.expoConfig?.extra as {
-  spotifyClientId?: string;
-  mockMode?: boolean;
-} | undefined;
-
-const CLIENT_ID = extra?.spotifyClientId ?? '';
-const MOCK_MODE = extra?.mockMode ?? false;
+const OWLET_STATUS_COLORS: Record<'idle' | 'checking' | 'ok' | 'error', string> = {
+  idle: colors.muted,
+  checking: colors.warning,
+  ok: colors.success,
+  error: colors.danger,
+};
 
 const MOCK_SPOTIFY_TOKENS: SpotifyTokens = {
   access_token: MOCK_TOKEN,
@@ -157,7 +158,7 @@ export default function SetupScreen({ navigation }: Props) {
 
           <View style={styles.sectionLabelRow}>
             <Text style={[styles.sectionLabel, { marginTop: 0, marginBottom: 0 }]}>Owlet</Text>
-            <View style={[styles.statusDot, { backgroundColor: owletStatus === 'ok' ? '#3fb950' : owletStatus === 'error' ? '#f85149' : owletStatus === 'checking' ? '#e3b341' : '#8b949e' }]} />
+            <View style={[styles.statusDot, { backgroundColor: OWLET_STATUS_COLORS[owletStatus] }]} />
           </View>
           <View style={styles.card}>
             <TextInput
@@ -249,11 +250,7 @@ export default function SetupScreen({ navigation }: Props) {
             </View>
           </View>
 
-          {error ? (
-            <View style={styles.errorBanner}>
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          ) : null}
+          {error ? <ErrorBanner message={error} style={styles.errorBanner} /> : null}
 
           <TouchableOpacity
             testID="start-routine-button"
@@ -277,10 +274,7 @@ export default function SetupScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: '#0d1117',
-  },
+  safe: sharedStyles.safe,
   flex: {
     flex: 1,
   },
@@ -403,16 +397,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   errorBanner: {
-    backgroundColor: '#3d1d1d',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#f85149',
-    padding: 12,
     marginTop: 16,
-  },
-  errorText: {
-    color: '#f85149',
-    fontSize: 14,
   },
   startButton: {
     backgroundColor: '#f85149',

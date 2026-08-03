@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
+import { sharedStyles } from '../lib/theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Done'>;
 
@@ -31,10 +32,7 @@ export default function DoneScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: '#0d1117',
-  },
+  safe: sharedStyles.safe,
   container: {
     flex: 1,
     alignItems: 'center',

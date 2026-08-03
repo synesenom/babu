@@ -20,61 +20,72 @@ function makeSignal(ms: number): AbortSignal {
   return ctrl.signal;
 }
 
+// Fetches JSON, aborting after 15s and raising OwletError with the response
+// body on a status the caller rejects (defaults to non-2xx).
+async function fetchJson<T>(
+  url: string,
+  options: RequestInit,
+  errLabel: string,
+  isOk: (res: Response) => boolean = (res) => res.ok,
+): Promise<T> {
+  const resp = await fetch(url, { ...options, signal: makeSignal(15000) });
+  if (!isOk(resp)) {
+    throw new OwletError(`${errLabel} failed (${resp.status}): ${await resp.text()}`);
+  }
+  return (await resp.json()) as T;
+}
+
 // --- Auth helpers ---
 
 async function firebaseSignIn(email: string, password: string, cfg: RegionConfig): Promise<string> {
   const url = `https://www.googleapis.com/identitytoolkit/v3/relyingparty/verifyPassword?key=${cfg.firebase_api_key}`;
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { ...ANDROID_SPOOF_HEADERS, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, returnSecureToken: true }),
-    signal: makeSignal(15000),
-  });
-  if (!resp.ok) {
-    throw new OwletError(`Firebase sign-in failed (${resp.status}): ${await resp.text()}`);
-  }
-  const data = await resp.json();
+  const data = await fetchJson<{ idToken?: string }>(
+    url,
+    {
+      method: 'POST',
+      headers: { ...ANDROID_SPOOF_HEADERS, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, returnSecureToken: true }),
+    },
+    'Firebase sign-in',
+  );
   if (!data.idToken) {
     throw new OwletError(`Firebase sign-in: unexpected response: ${JSON.stringify(data)}`);
   }
-  return data.idToken as string;
+  return data.idToken;
 }
 
 async function getMiniToken(idToken: string, cfg: RegionConfig): Promise<string> {
-  const resp = await fetch(cfg.url_mini, {
-    headers: { Authorization: idToken },
-    signal: makeSignal(15000),
-  });
-  if (!resp.ok) {
-    throw new OwletError(`SSO mini-token failed (${resp.status}): ${await resp.text()}`);
-  }
-  const data = await resp.json();
+  const data = await fetchJson<{ mini_token?: string }>(
+    cfg.url_mini,
+    { headers: { Authorization: idToken } },
+    'SSO mini-token',
+  );
   if (!data.mini_token) {
     throw new OwletError(`SSO mini-token: unexpected response: ${JSON.stringify(data)}`);
   }
-  return data.mini_token as string;
+  return data.mini_token;
 }
 
 async function aylaSignIn(miniToken: string, cfg: RegionConfig): Promise<{ token: string; ttl: number }> {
-  const resp = await fetch(cfg.url_signin, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({
-      app_id: cfg.app_id,
-      app_secret: cfg.app_secret,
-      provider: 'owl_id',
-      token: miniToken,
-    }),
-    signal: makeSignal(15000),
-  });
-  if (resp.status !== 200 && resp.status !== 201) {
-    throw new OwletError(`Ayla sign-in failed (${resp.status}): ${await resp.text()}`);
-  }
-  const data = await resp.json();
+  const data = await fetchJson<{ access_token?: string; expires_in?: string }>(
+    cfg.url_signin,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        app_id: cfg.app_id,
+        app_secret: cfg.app_secret,
+        provider: 'owl_id',
+        token: miniToken,
+      }),
+    },
+    'Ayla sign-in',
+    (res) => res.status === 200 || res.status === 201,
+  );
   if (!data.access_token) {
     throw new OwletError(`Ayla sign-in: no access_token in response: ${JSON.stringify(data)}`);
   }
-  return { token: data.access_token as string, ttl: parseInt(data.expires_in ?? '86400', 10) };
+  return { token: data.access_token, ttl: parseInt(data.expires_in ?? '86400', 10) };
 }
 
 async function authenticate(
@@ -96,33 +107,28 @@ function authHeader(token: string): Record<string, string> {
 }
 
 async function getDsns(token: string, cfg: RegionConfig): Promise<string[]> {
-  const resp = await fetch(`${cfg.url_base}/devices.json`, {
-    headers: authHeader(token),
-    signal: makeSignal(15000),
-  });
-  if (!resp.ok) {
-    throw new OwletError(`Device list failed (${resp.status}): ${await resp.text()}`);
-  }
-  const devices = await resp.json();
+  const devices = await fetchJson<Array<{ device: { dsn: string } }>>(
+    `${cfg.url_base}/devices.json`,
+    { headers: authHeader(token) },
+    'Device list',
+  );
   if (!devices || devices.length === 0) {
     throw new OwletError('No Owlet devices found on this account.');
   }
-  return (devices as Array<{ device: { dsn: string } }>).map((d) => d.device.dsn);
+  return devices.map((d) => d.device.dsn);
 }
 
 async function activate(dsn: string, token: string, cfg: RegionConfig): Promise<void> {
-  const resp = await fetch(
+  await fetchJson(
     `${cfg.url_base}/dsns/${dsn}/properties/${PROP_ACTIVE}/datapoints.json`,
     {
       method: 'POST',
       headers: { ...authHeader(token), 'Content-Type': 'application/json' },
       body: JSON.stringify({ datapoint: { metadata: {}, value: 1 } }),
-      signal: makeSignal(15000),
     },
+    'APP_ACTIVE post',
+    (res) => res.status === 200 || res.status === 201,
   );
-  if (resp.status !== 200 && resp.status !== 201) {
-    throw new OwletError(`APP_ACTIVE post failed (${resp.status}): ${await resp.text()}`);
-  }
 }
 
 async function getProps(
@@ -130,16 +136,13 @@ async function getProps(
   token: string,
   cfg: RegionConfig,
 ): Promise<Record<string, unknown>> {
-  const resp = await fetch(`${cfg.url_base}/dsns/${dsn}/properties.json`, {
-    headers: authHeader(token),
-    signal: makeSignal(15000),
-  });
-  if (!resp.ok) {
-    throw new OwletError(`Property fetch failed (${resp.status}): ${await resp.text()}`);
-  }
-  const data = await resp.json();
+  const data = await fetchJson<Array<{ property: { name: string; value: unknown } }>>(
+    `${cfg.url_base}/dsns/${dsn}/properties.json`,
+    { headers: authHeader(token) },
+    'Property fetch',
+  );
   const props: Record<string, unknown> = {};
-  for (const p of data as Array<{ property: { name: string; value: unknown } }>) {
+  for (const p of data) {
     props[p.property.name] = p.property.value;
   }
   return props;

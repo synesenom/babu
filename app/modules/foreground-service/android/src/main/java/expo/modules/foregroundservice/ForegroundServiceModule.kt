@@ -37,6 +37,9 @@ class ForegroundServiceModule : Module() {
     handler.removeCallbacks(ticker)
   }
 
+  private val context
+    get() = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+
   override fun definition() = ModuleDefinition {
     Name("ForegroundService")
 
@@ -46,7 +49,6 @@ class ForegroundServiceModule : Module() {
     // process may not start a foreground service. The routine starts it from the
     // Monitoring screen, which is in the foreground when the user taps Start.
     Function("startService") { title: String, body: String, tickIntervalMs: Int ->
-      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       val intent = Intent(context, RoutineForegroundService::class.java).apply {
         action = RoutineForegroundService.ACTION_START
         putExtra(RoutineForegroundService.EXTRA_TITLE, title)
@@ -57,7 +59,6 @@ class ForegroundServiceModule : Module() {
     }
 
     Function("updateService") { body: String ->
-      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       val intent = Intent(context, RoutineForegroundService::class.java).apply {
         action = RoutineForegroundService.ACTION_UPDATE
         putExtra(RoutineForegroundService.EXTRA_BODY, body)
@@ -67,7 +68,6 @@ class ForegroundServiceModule : Module() {
 
     Function("stopService") {
       stopTicking()
-      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       context.stopService(Intent(context, RoutineForegroundService::class.java))
     }
 
