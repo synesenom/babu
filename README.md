@@ -166,6 +166,7 @@ All tunables live in `app/src/lib/constants.ts`:
 | `HR_THRESHOLD` | 120 | BPM below which sleep is detected |
 | `POLL_INTERVAL_MS` | 5 000 | Owlet/Spotify polling interval (ms) |
 | `RESTART_THRESHOLD_SECONDS` | 5 | If less than this remains in the current track (or nothing is playing), the Chopin playlist is (re)started |
+| `TRANSITION_TAIL_SECONDS` | 12 | How close to the end of the current track the switch to white noise may happen. Derived from the poll interval (2× + 2 s) so a slow or skipped poll cannot step over the window |
 | `CHOPIN_PLAYLIST` | `spotify:playlist:5MKaz5wxcypYQLklyx34J2` | Lullaby playlist URI |
 | `WHITENOISE_PLAYLIST` | `spotify:playlist:4Lj9ZugyG3SNEA9XAxGVwx` | Sleep playlist URI |
 
@@ -186,12 +187,15 @@ app/
 │   │   └── useRoutine.ts         # Polling loop + state machine
 │   ├── lib/
 │   │   ├── owlet.ts              # Owlet client (Firebase → SSO → Ayla)
+│   │   ├── foregroundService.ts  # JS wrapper over the Android foreground service
 │   │   ├── spotifyApi.ts         # Spotify Web API (direct fetch)
 │   │   ├── spotifyAuth.ts        # OAuth PKCE + SecureStore persistence
 │   │   ├── types.ts              # Shared TypeScript types
 │   │   └── constants.ts          # Thresholds, playlists, Owlet endpoints
 │   └── navigation/
 │       └── types.ts              # React Navigation stack param types
+├── modules/
+│   └── foreground-service/       # Local Expo module: Android foreground service
 ├── e2e/                          # Maestro E2E flows
 ├── app.config.js                 # Expo config (injects .env values)
 └── app.json                      # App metadata (name, package, scheme)
@@ -203,7 +207,28 @@ app/
 idle → running → transitioning → done
 ```
 
-Managed by the `useRoutine` hook (`app/src/hooks/useRoutine.ts`) with `useReducer`. On each tick it reads the Owlet vitals and the Spotify playback state; when the heart rate drops below `HR_THRESHOLD`, polling stops, the hook waits out the remaining seconds of the current track, then starts the white noise playlist and transitions to `done`.
+Managed by the `useRoutine` hook (`app/src/hooks/useRoutine.ts`) with `useReducer`. On each tick it reads the Owlet vitals and the Spotify playback state; when the heart rate drops below `HR_THRESHOLD` the transition is locked in — from then on the heart rate is no longer re-evaluated, so a brief blip back above the threshold cannot cancel it.
+
+Polling continues while the current nocturne winds down. The switch to white noise then happens on the first poll where any of these is true:
+
+- nothing is playing, or playback is paused;
+- the track is within `TRANSITION_TAIL_SECONDS` of its end — the normal case, so white noise starts before the playlist auto-advances;
+- a track boundary passed between two polls (the track changed, or its position jumped backwards). The tail was missed, and switching now costs a few seconds of a fresh nocturne — far better than waiting out another whole track for a window that may be missed again.
+
+Once the switch is due it stays due: if it fails (no matching Spotify device, or Spotify refuses the play call) the routine stays in `transitioning`, shows the reason, and retries on the next poll. It reaches `done` only once white noise is actually playing.
+
+### Running in the background
+
+The routine has to keep polling after the phone is put down — sleep is detected first, and the switch to white noise happens minutes later. An Android foreground service (`app/modules/foreground-service/`, a local Expo module) keeps it alive:
+
+- an ongoing notification keeps the process at foreground importance, out of reach of Doze and OEM background killers;
+- a partial wake lock keeps the CPU running with the screen off;
+- the service is a `HeadlessJsTaskService`, because React Native tears down the callback behind **all** JS timers when the activity pauses, and only keeps it while a headless task is active;
+- the poll loop itself is driven by a native tick event rather than `setInterval`, for the same reason.
+
+The notification shows the live heart rate and updates on every poll, so it doubles as a health check: if the text stops advancing, the OS has frozen the routine. Tapping it reopens the app.
+
+Two caveats. Android 15 limits a `dataSync` foreground service to six hours a day, so the service stops itself at 5 h 45 m. And aggressive battery savers (Samsung, Xiaomi, OnePlus) may still kill the app — exempt Babu from battery optimisation if the routine stops overnight.
 
 ### Owlet auth chain
 

@@ -3,3 +3,6 @@
 node_modules
 .idea/
 app/android/
+
+# Local Expo module build output
+app/modules/*/android/build/

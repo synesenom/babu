@@ -10,6 +10,9 @@ Bedtime automation: Owlet Smart Sock heart rate → Spotify playlist control. Wh
 
 ```
 app/
+├── modules/
+│   └── foreground-service/       Local Expo module (Android): keeps the routine
+│                                 running while the app is backgrounded
 ├── src/
 │   ├── screens/
 │   │   ├── SetupScreen.tsx       Credential form + Spotify OAuth + device picker
@@ -23,6 +26,7 @@ app/
 │   │   ├── spotifyAuth.ts        OAuth PKCE + expo-secure-store persistence
 │   │   ├── types.ts              Shared TypeScript types
 │   │   ├── constants.ts          Thresholds, playlists, Owlet region endpoints
+│   │   ├── foregroundService.ts  JS wrapper over the Android foreground service
 │   │   ├── __tests__/            Jest unit tests
 │   │   └── __mocks__/fixtures.ts Shared test fixtures
 │   └── navigation/types.ts       React Navigation stack param types
@@ -59,6 +63,7 @@ maestro test e2e/        # E2E flows
 | `HR_THRESHOLD` | 120 BPM | Sleep detection threshold |
 | `POLL_INTERVAL_MS` | 5 000 ms | Owlet/Spotify polling interval |
 | `RESTART_THRESHOLD_SECONDS` | 5 s | Restart Chopin if track is ending / nothing playing |
+| `TRANSITION_TAIL_SECONDS` | 12 s (2 × poll + 2) | How close to the track end the white-noise switch may fire |
 | `CHOPIN_PLAYLIST` | `spotify:playlist:5MKaz5wxcypYQLklyx34J2` | Lullaby playlist |
 | `WHITENOISE_PLAYLIST` | `spotify:playlist:4Lj9ZugyG3SNEA9XAxGVwx` | Sleep playlist |
 
@@ -96,8 +101,39 @@ EU region uses separate Firebase/Ayla endpoints (`OWLET_REGIONS` in `constants.t
 idle → running → transitioning → done
 ```
 - `useReducer` for state; polling interval held in a `useRef` so it survives re-renders.
-- Each tick: Owlet read → Spotify playback read → either transition (HR below threshold: wait out remaining track seconds, start white noise) or keep music alive (restart Chopin when `remaining_seconds < RESTART_THRESHOLD_SECONDS` or nothing playing).
+- Each tick: Owlet read → Spotify playback read → either transition (HR below threshold) or keep music alive (restart Chopin when `remaining_seconds < RESTART_THRESHOLD_SECONDS` or nothing playing).
+- Once the transition is locked in, the white-noise switch becomes due on the first tick where **any** of these holds: nothing is playing / playback is paused; the track is within `TRANSITION_TAIL_SECONDS` of ending; or a track boundary passed between two polls (track name changed, or `remaining_seconds` jumped back up). The last one matters — gating only on the tail gives one chance per track, and a tick skipped by the in-flight guard silently costs a whole nocturne. Once due it stays due, so a failed switch retries on the next poll instead of going back to waiting.
+- The switch reports `done` only if white noise actually started; a missing device or a refused play call surfaces as an error and keeps the routine polling.
 - `monitorOnly` flag disables all playback control.
+
+### Running in the background (`modules/foreground-service/`)
+The routine must keep polling when the app is off screen — the parent puts the
+phone down after sleep is detected, and the switch to white noise happens minutes
+later. Android fights this in three separate ways, so the local Expo module
+answers all three:
+
+| Problem | Answer |
+|---|---|
+| The process is frozen or killed once backgrounded (Doze, OEM killers) | A foreground service (`dataSync` type) with an ongoing notification |
+| The CPU suspends when the screen goes off | A partial wake lock held by the service |
+| RN removes the choreographer callback behind **every JS timer** in `onHostPause` | The service is a `HeadlessJsTaskService`; an always-pending keep-alive task keeps timers alive (`JavaTimerManager` only clears the callback when no headless task is active) |
+
+Because of the third point a JS `setInterval` cannot be trusted as the poll loop.
+The service runs its own main-looper `Handler` and emits an `onTick` event at the
+poll interval; `useRoutine` subscribes to that and falls back to `setInterval`
+only where the native module does not exist (iOS, web, Expo Go, Jest).
+
+The ongoing notification shows the live reading and updates every tick, which
+makes it the quickest way to check the loop is still alive: if the text stops
+advancing, the OS froze the routine.
+
+Notes:
+- Android 15 caps a `dataSync` foreground service at 6 h/day, so the service
+  stops itself at 5 h 45 m rather than letting the platform kill the app.
+- `POST_NOTIFICATIONS` is requested at start. Denying it only hides the
+  notification; the service still runs.
+- Native changes need a rebuild (`npx expo run:android`) — Fast Refresh does not
+  reload them.
 
 ### Spotify
 - `spotifyAuth.ts`: OAuth authorization-code + PKCE via `expo-auth-session`; tokens persisted in `expo-secure-store`. Redirect scheme `babu://auth`.

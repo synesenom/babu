@@ -3,6 +3,14 @@ export const MOCK_TOKEN = '__babu_mock__';
 export const POLL_INTERVAL_MS = 5_000;
 export const RESTART_THRESHOLD_SECONDS = 5;
 
+// How close to the end of the current Chopin track the white-noise switch may
+// fire. Deliberately wider than RESTART_THRESHOLD_SECONDS: the switch gets one
+// chance per track, so the window must be comfortably wider than the real gap
+// between polls or no poll ever lands inside it. Ticks that overrun the poll
+// interval are skipped by the in-flight guard, so the effective gap can be two
+// intervals — hence 2x, plus a margin for network latency.
+export const TRANSITION_TAIL_SECONDS = (POLL_INTERVAL_MS / 1000) * 2 + 2;
+
 export const CHOPIN_PLAYLIST = 'spotify:playlist:5MKaz5wxcypYQLklyx34J2';
 export const WHITENOISE_PLAYLIST = 'spotify:playlist:4Lj9ZugyG3SNEA9XAxGVwx';
 

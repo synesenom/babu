@@ -4,12 +4,20 @@ import {
   HR_THRESHOLD,
   POLL_INTERVAL_MS,
   RESTART_THRESHOLD_SECONDS,
+  TRANSITION_TAIL_SECONDS,
   CHOPIN_PLAYLIST,
   WHITENOISE_PLAYLIST,
 } from '../lib/constants';
 import type { Owlet } from '../lib/owlet';
 import { getCurrentPlayback, findDeviceByName, startPlaylist } from '../lib/spotifyApi';
 import { getValidToken } from '../lib/spotifyAuth';
+import {
+  startForegroundService,
+  updateForegroundService,
+  stopForegroundService,
+  addTickListener,
+  type TickSubscription,
+} from '../lib/foregroundService';
 
 type Action =
   | { type: 'START' }
@@ -19,6 +27,19 @@ type Action =
   | { type: 'TRANSITIONING' }
   | { type: 'DONE' }
   | { type: 'ERROR'; payload: string };
+
+// Text for the ongoing notification. Leads with the vitals so the routine can be
+// checked from the lock screen without opening the app.
+function notificationBody(
+  reading: OwletReading,
+  transitioning: boolean,
+  monitorOnly: boolean,
+): string {
+  const hr = reading.heart_rate !== null ? `${reading.heart_rate} BPM` : 'No reading';
+  if (transitioning) return `${hr} · Sleep detected — white noise at the end of the track`;
+  if (monitorOnly) return `${hr} · Monitoring only`;
+  return `${hr} · Keeping the lullaby going`;
+}
 
 const initialState: RoutineState = {
   status: 'idle',
@@ -76,23 +97,50 @@ export function useRoutine(
   // Set once the white-noise switch has been kicked off, so a later tick that
   // races the switch cannot fire it a second time.
   const switchingRef = useRef(false);
+  // Set once the routine has decided the switch is due. It never goes back to
+  // false: an attempt that fails (device gone, Spotify refuses the play call)
+  // must be retried on the very next poll, not sent back to waiting for a track
+  // tail that may already have passed.
+  const switchDueRef = useRef(false);
+  // The playback seen on the previous transitioning poll, used to notice that a
+  // track boundary passed between two polls.
+  const lastPlaybackRef = useRef<{ trackName: string; remainingSeconds: number } | null>(null);
+
+  // Set when the native service is driving the loop instead of setInterval.
+  const tickSubscriptionRef = useRef<TickSubscription | null>(null);
 
   const clearPolling = useCallback(() => {
     if (intervalRef.current !== null) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
+    if (tickSubscriptionRef.current !== null) {
+      tickSubscriptionRef.current.remove();
+      tickSubscriptionRef.current = null;
+    }
   }, []);
 
   // Switches to the white-noise playlist. Called from within a tick (serialized
-  // by tickingRef) the moment a live poll shows the current Chopin track in its
-  // final seconds — see tick() for why this is poll-driven rather than timed.
+  // by tickingRef) once the switch is due — see tick() for how that is decided.
+  //
+  // Throws if white noise did not actually start. The routine must never report
+  // "done" on a switch that silently did nothing: that stops the polling and
+  // sends the app to the Done screen while Chopin (or silence) plays on, which
+  // is indistinguishable from the transition never happening. Throwing keeps the
+  // routine in "transitioning", surfaces the reason, and lets the next poll retry.
   const completeTransition = useCallback(async (accessToken: string) => {
     const deviceId = await findDeviceByName(accessToken, deviceName);
-    if (deviceId) {
-      await startPlaylist(accessToken, WHITENOISE_PLAYLIST, deviceId);
+    if (!deviceId) {
+      throw new Error(`Spotify device "${deviceName}" not found — cannot start white noise`);
+    }
+    const started = await startPlaylist(accessToken, WHITENOISE_PLAYLIST, deviceId);
+    if (!started) {
+      throw new Error('Spotify would not start the white-noise playlist');
     }
     clearPolling();
+    // Only now: while a failed switch is still retrying, the routine still needs
+    // the OS to leave it alone.
+    stopForegroundService();
     dispatch({ type: 'DONE' });
   }, [deviceName, clearPolling]);
 
@@ -118,12 +166,11 @@ export function useRoutine(
       const playback = await getCurrentPlayback(accessToken);
       dispatch({ type: 'NOW_PLAYING', payload: playback });
 
-      if (monitorOnly) return;
-
       // Lock in the transition the first time HR drops below the sleep threshold.
       // Once locked, HR is no longer re-evaluated: a brief blip back above the
       // threshold must not cancel the switch to white noise.
       if (
+        !monitorOnly &&
         !transitionRef.current &&
         reading.heart_rate !== null &&
         reading.heart_rate < HR_THRESHOLD
@@ -132,31 +179,69 @@ export function useRoutine(
         dispatch({ type: 'TRANSITIONING' });
       }
 
+      // Keep the ongoing notification in step with the routine. While the app is
+      // backgrounded this is the only visible sign that polling is still alive —
+      // if the text stops advancing, the OS has frozen the loop.
+      updateForegroundService(notificationBody(reading, transitionRef.current, monitorOnly));
+
+      if (monitorOnly) return;
+
       // `remaining_seconds` is a live query against Spotify made on THIS tick, so
-      // it reflects the track's real position right now. Both branches below key
-      // off "is the current track in its final seconds (or nothing playing)?".
+      // it reflects the track's real position right now.
       const remainingSeconds = playback?.remaining_seconds ?? null;
-      const trackEnding =
-        remainingSeconds === null || remainingSeconds < RESTART_THRESHOLD_SECONDS;
 
       if (transitionRef.current) {
         // Sleep detected. Let the current Chopin track wind down, then switch to
-        // white noise — but do it while the track is still in its final seconds,
+        // white noise — ideally while the track is still in its final seconds,
         // BEFORE the repeating playlist auto-advances to a fresh Chopin track.
         //
         // This is deliberately poll-driven, not a one-shot setTimeout seeded with
         // the remaining_seconds captured at sleep-detection time. That timer
         // approach cannot hit the boundary: the snapshot ages by network latency
         // and the playlist auto-advances, so the switch reliably landed a few
-        // seconds INTO the next Chopin track. Deciding from each fresh poll and
-        // switching before the boundary eliminates that bleed entirely. We never
-        // restart Chopin once transitioning.
-        if (trackEnding && !switchingRef.current) {
+        // seconds INTO the next Chopin track.
+        //
+        // But a poll-driven switch gated *only* on the tail is just as broken in
+        // the other direction: it gets one chance per track, and if no poll lands
+        // inside the window the routine waits out another entire nocturne and
+        // rolls the dice again — the "stuck in transitioning, white noise never
+        // starts" bug. Ticks slower than the poll interval are skipped by the
+        // in-flight guard, so missing the window is routine, not exceptional.
+        //
+        // So the switch is due when ANY of these holds, and once due it stays due:
+        const previous = lastPlaybackRef.current;
+        lastPlaybackRef.current = playback
+          ? { trackName: playback.track_name, remainingSeconds: playback.remaining_seconds }
+          : null;
+
+        //   nothing is playing, or playback is paused — there is no track left to
+        //   wind down, and a paused player would hold remaining_seconds steady
+        //   forever;
+        const nothingToWaitFor = playback === null || !playback.is_playing;
+        //   the current track is inside the tail window — the normal, clean case:
+        //   white noise starts before the playlist auto-advances;
+        const inTail = remainingSeconds !== null && remainingSeconds <= TRANSITION_TAIL_SECONDS;
+        //   a boundary passed between two polls (the playlist advanced to another
+        //   track, or the same one restarted and the position jumped backwards).
+        //   The tail was missed; switching now costs a few seconds of a fresh
+        //   nocturne, which beats waiting for a window we may never see.
+        const boundaryMissed =
+          playback !== null &&
+          previous !== null &&
+          (playback.track_name !== previous.trackName ||
+            playback.remaining_seconds > previous.remainingSeconds + 1);
+
+        if (nothingToWaitFor || inTail || boundaryMissed) {
+          switchDueRef.current = true;
+        }
+
+        if (switchDueRef.current && !switchingRef.current) {
           switchingRef.current = true;
           try {
             await completeTransition(accessToken);
           } catch (err) {
-            // Let a later poll retry the switch if this attempt failed.
+            // Let the next poll retry the switch. switchDueRef stays true, so the
+            // retry is immediate rather than waiting for another track tail.
             switchingRef.current = false;
             throw err;
           }
@@ -166,6 +251,8 @@ export function useRoutine(
 
       // Awake: keep Chopin alive — restart it when the track is ending or nothing
       // is playing.
+      const trackEnding =
+        remainingSeconds === null || remainingSeconds < RESTART_THRESHOLD_SECONDS;
       if (trackEnding) {
         const deviceId = await findDeviceByName(accessToken, deviceName);
         if (deviceId) {
@@ -182,20 +269,67 @@ export function useRoutine(
   const start = useCallback(() => {
     transitionRef.current = false;
     switchingRef.current = false;
+    switchDueRef.current = false;
+    lastPlaybackRef.current = null;
+    // Android freezes JS timers for a backgrounded app (Doze, or an OEM
+    // background killer), which would stop the polling loop the moment the phone
+    // is put down — and with it the transition. A foreground service keeps the
+    // process alive and out of Doze for as long as the routine runs. Fire and
+    // forget: if it cannot start, the routine still runs while the app is on
+    // screen, which is strictly what it did before.
     dispatch({ type: 'START' });
-    intervalRef.current = setInterval(tick, pollIntervalMs);
+
+    const startInterval = () => {
+      if (intervalRef.current === null) {
+        intervalRef.current = setInterval(tick, pollIntervalMs);
+      }
+    };
+
+    // Prefer the service's own tick stream. React Native drops its timer
+    // callback in onHostPause, so a setInterval here stops the moment the app
+    // leaves the screen — the native loop runs on the main looper under the
+    // service's wake lock and keeps firing with the screen off. The interval
+    // stays as the fallback wherever the native service does not exist.
+    const subscription = addTickListener(() => {
+      void tick();
+    });
+    if (subscription) {
+      tickSubscriptionRef.current = subscription;
+    } else {
+      startInterval();
+    }
+
+    void startForegroundService('Babu', 'Starting the bedtime routine…', pollIntervalMs).then(
+      (running) => {
+        // Subscribed to a tick stream that will never emit — the module is
+        // present but the service did not start. Polling nothing at all is worse
+        // than not having the service, so take the interval after all.
+        // A null subscription here means stop() already ran; leave it stopped.
+        if (!running && tickSubscriptionRef.current !== null) {
+          tickSubscriptionRef.current.remove();
+          tickSubscriptionRef.current = null;
+          startInterval();
+        }
+      },
+    );
   }, [tick, pollIntervalMs]);
 
   const stop = useCallback(() => {
     clearPolling();
+    stopForegroundService();
     transitionRef.current = false;
     switchingRef.current = false;
+    switchDueRef.current = false;
+    lastPlaybackRef.current = null;
     dispatch({ type: 'STOP' });
   }, [clearPolling]);
 
   useEffect(() => {
     return () => {
       clearPolling();
+      // The service exists to protect this loop; if the loop is gone, so is its
+      // reason to hold the process open.
+      stopForegroundService();
     };
   }, [clearPolling]);
 
