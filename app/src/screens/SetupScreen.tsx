@@ -18,20 +18,14 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { useSpotifyAuth, loadStoredTokens, saveTokens } from '../lib/spotifyAuth';
 import { Owlet } from '../lib/owlet';
-import { createDevOwlet } from '../lib/devOwlet';
 import VersionLabel from '../components/VersionLabel';
 import ErrorBanner from '../components/ErrorBanner';
-import DevSleepDelayInput from '../components/DevSleepDelayInput';
-import type { OwletRegion, SpotifyTokens } from '../lib/types';
+import type { OwletReading, OwletRegion, SpotifyTokens } from '../lib/types';
 import { MOCK_TOKEN } from '../lib/constants';
 import { CLIENT_ID, MOCK_MODE } from '../lib/config';
 import { colors, sharedStyles } from '../lib/theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Setup'>;
-
-// Mirrors the ~2-tick sleep detection of the old hardcoded mock at the mock
-// poll interval (500ms).
-const DEFAULT_DEV_SLEEP_DELAY_SECONDS = '1';
 
 const OWLET_STATUS_COLORS: Record<'idle' | 'checking' | 'ok' | 'error', string> = {
   idle: colors.muted,
@@ -52,7 +46,6 @@ export default function SetupScreen({ navigation }: Props) {
   const [region, setRegion] = useState<OwletRegion>('world');
   const [deviceName, setDeviceName] = useState('iphone');
   const [monitorOnly, setMonitorOnly] = useState(false);
-  const [devSleepDelaySeconds, setDevSleepDelaySeconds] = useState(DEFAULT_DEV_SLEEP_DELAY_SECONDS);
   const [showPassword, setShowPassword] = useState(false);
   const [owletStatus, setOwletStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
   const [initialising, setInitialising] = useState(false);
@@ -114,10 +107,27 @@ export default function SetupScreen({ navigation }: Props) {
     setInitialising(true);
     try {
       if (MOCK_MODE) {
-        const sleepDelaySeconds = Number(devSleepDelaySeconds) || Number(DEFAULT_DEV_SLEEP_DELAY_SECONDS);
-        const devOwlet = createDevOwlet(sleepDelaySeconds) as unknown as Owlet;
+        let tickCount = 0;
+        const mockOwlet = {
+          read: async (): Promise<OwletReading> => {
+            tickCount += 1;
+            return {
+              heart_rate: tickCount <= 2 ? 120 : 90,
+              oxygen: 98,
+              battery: 80,
+              movement: 'still',
+              sock_off: false,
+              sock_connected: true,
+              base_on: true,
+              charging: false,
+              dsn: 'mock-dsn',
+              timestamp: new Date().toISOString(),
+              raw: {},
+            };
+          },
+        } as unknown as Owlet;
         navigation.navigate('Monitoring', {
-          owlet: devOwlet,
+          owlet: mockOwlet,
           tokens: MOCK_SPOTIFY_TOKENS,
           deviceName: 'mock',
           pollIntervalMs: 500,
@@ -238,9 +248,6 @@ export default function SetupScreen({ navigation }: Props) {
                 thumbColor="#ffffff"
               />
             </View>
-            {MOCK_MODE ? (
-              <DevSleepDelayInput value={devSleepDelaySeconds} onChangeText={setDevSleepDelaySeconds} />
-            ) : null}
           </View>
 
           {error ? <ErrorBanner message={error} style={styles.errorBanner} /> : null}
