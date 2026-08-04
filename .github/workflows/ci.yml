@@ -74,11 +74,30 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-          # No `cache: gradle`: the android/ project is generated later by
-          # `expo prebuild`, so there are no Gradle files to hash for a cache
-          # key yet and the cache step would fail.
+          # No `cache: gradle`: it hashes the project's Gradle files to build
+          # its key, and android/ does not exist yet — `expo prebuild` generates
+          # it further down. The explicit cache step below keys off the
+          # prebuild's *inputs* instead, which do exist at this point.
 
       - uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle dependencies and build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          # Same key as build-apk.yml on purpose: the two jobs build different
+          # variants of the same project, so whichever runs first warms the
+          # dependency cache for the other.
+          key: gradle-${{ runner.os }}-${{ hashFiles('app/package-lock.json', 'app/app.json', 'app/app.config.js') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Enable the Gradle build cache
+        run: |
+          mkdir -p ~/.gradle
+          echo 'org.gradle.caching=true' >> ~/.gradle/gradle.properties
 
       - name: Install dependencies
         run: npm ci
