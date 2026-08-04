@@ -1,7 +1,9 @@
 ---
-description: Open (or update) a PR for the current branch with a detailed body that closes the related issue(s) on merge
-argument-hint: [issue-number...]
+name: pr
+description: Open or update a pull request for the current branch with a detailed summary and test plan body, wired so that merging into main automatically closes the related issue. Use whenever the user asks to open a PR, create a pull request, submit the branch for review, or wants the PR to close a specific issue, for example open a PR for this or slash pr 52. Optional argument is one or more issue numbers, inferred from the branch name if omitted, or asked for otherwise.
 ---
+
+# PR
 
 Create a pull request for the current branch's work. The body must be
 detailed enough to review without re-reading the whole diff, and wired so
@@ -10,8 +12,8 @@ them.
 
 ## 1. Determine the issue(s)
 
-- If `$ARGUMENTS` is non-empty, treat it as a whitespace/comma-separated list
-  of issue numbers.
+- If an argument was given, treat it as a whitespace/comma-separated list of
+  issue numbers.
 - Otherwise, try to infer the issue number from the current branch name
   (e.g. `claude/resolve-issue-52-owrngo` → `52`) — look for `issue-(\d+)`
   anywhere in the name.
@@ -26,7 +28,7 @@ decide silently either way.
 
 ## 2. Pre-flight
 
-- `git status` — this command does not commit or stash anything on your
+- `git status` — this skill does not commit or stash anything on your
   behalf. If the tree isn't clean, stop and ask the user to handle it first.
 - Confirm the current branch is not `main` (or the repo's default branch) —
   PRs go *from* a feature branch *into* it, never the reverse. If on the

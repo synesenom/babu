@@ -1,7 +1,9 @@
 ---
-description: Eliminate code smells in a file using CodeScene's Code Health analysis
-argument-hint: <file>
+name: fix-smell
+description: Eliminate code smells in a specific file using CodeScene Code Health analysis, via an iterative diagnose-fix-verify loop that never changes observable behavior. Use whenever the user asks to clean up, refactor for code health, fix code smells, or improve the CodeScene score of a particular file, for example fix the smells in SetupScreen or slash fix-smell app/src/lib/owlet.ts. Takes the file path as its argument, and asks for it if none was given.
 ---
+
+# Fix Smell
 
 You are eliminating code smells in a target file using CodeScene's Code Health
 analysis as your guide.
@@ -30,10 +32,10 @@ blast radius as small as the smell demands and no smaller.
 
 ## 1. Resolve the file
 
-- If `$1` is a relative path, resolve it against the repo root
-  (`/home/user/babu/$1`).
-- If no argument is provided, report usage and stop:
-  "`/fix-smell <file>` — pass the path to the file to clean."
+- Take the file path given as this skill's argument. If it's a relative
+  path, resolve it against the repo root (`/home/user/babu/<path>`).
+- If no file path was given, ask the user which file to clean rather than
+  guessing.
 
 ## 2. Baseline measurement
 
@@ -216,7 +218,7 @@ score(s) and any remaining smells.
   values, no changed prop/parameter signatures, even when a fix spans
   multiple files
 - Add or edit tests as part of the smell fix (existing tests must simply
-  keep passing — this command doesn't write new ones)
+  keep passing — this skill doesn't write new ones)
 - Touch files outside the smell's actual footprint — multi-file changes are
   allowed only when the smell itself spans files (a God File split, a
   cross-file duplication merge, updating call sites for a moved helper),
