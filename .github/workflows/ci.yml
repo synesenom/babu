@@ -162,7 +162,7 @@ jobs:
           working-directory: app
           script: |
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-            maestro test e2e/ --format junit --output maestro-report.xml
+            maestro test e2e/ --format junit --output maestro-report.xml --debug-output maestro-debug
 
       - name: Upload Maestro report
         if: always()
@@ -171,5 +171,5 @@ jobs:
           name: maestro-report
           path: |
             app/maestro-report.xml
-            app/.maestro/tests/**
+            app/maestro-debug/**
           if-no-files-found: ignore

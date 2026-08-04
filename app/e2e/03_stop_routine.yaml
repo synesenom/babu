@@ -2,8 +2,11 @@ appId: com.enysmones.babu
 ---
 - launchApp:
     clearState: true
+# Cold boot on the CI emulator (software rendering, 2 cores) can outlast
+# Maestro's default ~17s wait, so the first interaction gets more room.
 - tapOn:
     id: "connect-spotify-button"
+    timeout: 45000
 - assertVisible: "Connected"
 - tapOn:
     id: "start-routine-button"
