@@ -1,16 +1,20 @@
 ---
-description: Research, plan, implement and validate a GitHub issue end to end
-argument-hint: <issue-number>
+name: resolve
+description: Research, plan, implement, and validate a GitHub issue end to end, following the strict TDD workflow documented in CLAUDE.md. Use whenever the user asks to resolve, implement, work on, fix, or close out a specific issue by number, for example resolve issue 52 or slash resolve 52. Takes the issue number as its argument, and asks for it if none was given rather than guessing.
 ---
 
-Resolve issue #$1 in this repository, working on the current branch.
+# Resolve
 
-Work through all four phases in order. Do not skip ahead — the research phase
-routinely changes what the implementation should be.
+Resolve the issue whose number was given as this skill's argument, working
+on the current branch. If no issue number was given, ask the user which
+issue to resolve rather than guessing.
+
+Work through all four phases in order. Do not skip ahead — the research
+phase routinely changes what the implementation should be.
 
 ## 1. Research
 
-- Read issue #$1 in full, including its comments.
+- Read the issue in full, including its comments.
 - Follow every issue it references. If it says "Blocked by #N", check whether #N is
   actually closed. If it is not, stop and report that rather than guessing at its
   outputs.
@@ -50,7 +54,7 @@ checkpoint.
 - `cd app && npm run test:coverage` if the issue adds a new module.
 - Re-read the issue's **Acceptance** section and check each criterion against what you
   actually built.
-- Review the branch diff as a whole (`git diff main...HEAD`) and ask whether it
+- Review the branch diff as a whole (`git diff origin/main...HEAD`) and ask whether it
   implements the issue *completely* — including the parts that are easy to forget, like
   mock-mode short-circuits, error states, and `testID`s the E2E flows need.
 
