@@ -55,7 +55,7 @@ export default function MonitoringScreen({ route, navigation }: Props) {
     navigation.replace('Setup');
   }
 
-  const { lastReading, nowPlaying, status, error } = state;
+  const { lastReading, nowPlaying, status, waitingFor, error } = state;
   const statusColor = STATUS_COLORS[status];
 
   return (
@@ -99,13 +99,24 @@ export default function MonitoringScreen({ route, navigation }: Props) {
           )}
         </View>
 
-        {nowPlaying && (
-          <View style={styles.card}>
-            <Text style={styles.cardLabel}>Now Playing</Text>
-            <Text style={styles.trackName}>{nowPlaying.track_name}</Text>
-            <Text style={styles.artistName}>{nowPlaying.artist_name}</Text>
-          </View>
-        )}
+        <View style={styles.card}>
+          <Text style={styles.cardLabel}>Now Playing</Text>
+          {nowPlaying ? (
+            <>
+              <Text style={styles.trackName}>{nowPlaying.track_name}</Text>
+              <Text style={styles.artistName}>{nowPlaying.artist_name}</Text>
+            </>
+          ) : (
+            <Text style={styles.artistName}>Nothing playing</Text>
+          )}
+          {status === 'transitioning' && (
+            <Text style={styles.waitingFor}>
+              {waitingFor
+                ? `Sleep detected — white noise after “${waitingFor}”`
+                : 'Sleep detected — starting white noise'}
+            </Text>
+          )}
+        </View>
 
         {error && !errorDismissed && (
           <ErrorBanner message={error} onPress={() => setErrorDismissed(true)} style={styles.errorBanner} />
@@ -217,6 +228,12 @@ const styles = StyleSheet.create({
   artistName: {
     color: '#8b949e',
     fontSize: 14,
+  },
+  waitingFor: {
+    color: colors.warning,
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 12,
   },
   errorBanner: {
     marginBottom: 16,

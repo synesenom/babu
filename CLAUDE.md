@@ -24,6 +24,7 @@ app/
 │   │   ├── owlet.ts              Owlet client (Firebase → SSO → Ayla auth chain)
 │   │   ├── spotifyApi.ts         Spotify Web API via direct fetch
 │   │   ├── spotifyAuth.ts        OAuth PKCE + expo-secure-store persistence
+│   │   ├── transition.ts         Chopin → white-noise decisions (pure functions)
 │   │   ├── types.ts              Shared TypeScript types
 │   │   ├── constants.ts          Thresholds, playlists, Owlet region endpoints
 │   │   ├── foregroundService.ts  JS wrapper over the Android foreground service
@@ -63,7 +64,6 @@ maestro test e2e/        # E2E flows
 | `HR_THRESHOLD` | 120 BPM | Sleep detection threshold |
 | `POLL_INTERVAL_MS` | 5 000 ms | Owlet/Spotify polling interval |
 | `RESTART_THRESHOLD_SECONDS` | 5 s | Restart Chopin if track is ending / nothing playing |
-| `TRANSITION_TAIL_SECONDS` | 12 s (2 × poll + 2) | How close to the track end the white-noise switch may fire |
 | `CHOPIN_PLAYLIST` | `spotify:playlist:5MKaz5wxcypYQLklyx34J2` | Lullaby playlist |
 | `WHITENOISE_PLAYLIST` | `spotify:playlist:4Lj9ZugyG3SNEA9XAxGVwx` | Sleep playlist |
 
@@ -101,10 +101,55 @@ EU region uses separate Firebase/Ayla endpoints (`OWLET_REGIONS` in `constants.t
 idle → running → transitioning → done
 ```
 - `useReducer` for state; polling interval held in a `useRef` so it survives re-renders.
-- Each tick: Owlet read → Spotify playback read → either transition (HR below threshold) or keep music alive (restart Chopin when `remaining_seconds < RESTART_THRESHOLD_SECONDS` or nothing playing).
-- Once the transition is locked in, the white-noise switch becomes due on the first tick where **any** of these holds: nothing is playing / playback is paused; the track is within `TRANSITION_TAIL_SECONDS` of ending; or a track boundary passed between two polls (track name changed, or `remaining_seconds` jumped back up). The last one matters — gating only on the tail gives one chance per track, and a tick skipped by the in-flight guard silently costs a whole nocturne. Once due it stays due, so a failed switch retries on the next poll instead of going back to waiting.
-- The switch reports `done` only if white noise actually started; a missing device or a refused play call surfaces as an error and keeps the routine polling.
+- Each tick: Owlet read → Spotify playback read → either advance the transition (once HR has dropped below threshold) or keep music alive (restart Chopin when `remaining_seconds < RESTART_THRESHOLD_SECONDS` or nothing playing).
 - `monitorOnly` flag disables all playback control.
+
+### The transition (`app/src/lib/transition.ts`)
+
+The requirement is one sentence: **when the baby falls asleep, let the nocturne
+that is playing finish, then put white noise on.** The decisions live in
+`transition.ts` as pure functions so that sentence is actually written down
+somewhere and can be tested without React, timers, or Spotify.
+
+Three rules carry the whole design, and each exists because breaking it produced
+a specific reported bug:
+
+1. **Commit to one track.** `captureTarget()` records the track id, its device,
+   and the wall-clock time it will end. Every later poll asks only "is *that*
+   track over yet" (`evaluateWait()`). The earlier version inferred the boundary
+   from differences between consecutive polls, which made every hiccup in the
+   poll stream look identical to the track ending.
+2. **Missing data is not a signal.** `/me/player` returns 204 routinely, and
+   Spotify reports `is_playing: false` for a moment after any play call. A single
+   such sample used to commit the routine to switching immediately, cutting a
+   nocturne short by minutes. It now takes `BLIND_POLLS_BEFORE_IDLE` consecutive
+   blind polls before silence is believed.
+3. **Verify the switch.** `startPlaylist` returning 2xx is not white noise coming
+   out of a speaker — Spotify answers `202 Accepted` when it is merely waking a
+   device. The routine reports `done` only once a later poll shows
+   `context_uri === WHITENOISE_PLAYLIST`, and re-issues the play call on every
+   poll until then.
+
+Two deliberate choices worth not "fixing":
+
+- **The switch is biased late.** It fires on the first poll after the committed
+  track has run its length, so white noise may bleed a few seconds into whatever
+  the playlist started next. That is intentional — the original version behaved
+  this way and it is preferred to clipping the quiet final bars of a nocturne. Do
+  not reintroduce a "switch N seconds before the end" window; it gets exactly one
+  chance per track and is what made the switch unreliable.
+- **The detection poll does nothing but announce itself.** `transitioning` has to
+  be a state the screen can render before anything acts on it. Dispatching
+  `TRANSITIONING` and `DONE` inside one tick is what made the app jump to the Done
+  screen with no transition ever visible.
+
+`RoutineState.waitingFor` carries the committed track's name so the monitoring
+screen and the ongoing notification can both say which piece has to finish.
+
+Mock mode models playback (`resetMockPlayback()` / `mockPlayback()` in
+`spotifyApi.ts`) rather than reporting nothing, so the transition is reachable and
+completable in a `MOCK_MODE=1` build. A mock that always answers "nothing playing"
+makes the whole mechanism unexercisable.
 
 ### Running in the background (`modules/foreground-service/`)
 The routine must keep polling when the app is off screen — the parent puts the
