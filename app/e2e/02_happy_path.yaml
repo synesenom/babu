@@ -1,5 +1,18 @@
-# Verifies: Setup → Monitoring (shows vitals) → auto-advance to Done
-# Requires mock mode APK: MOCK_MODE=1 npx expo run:android
+# The transition, end to end: Setup → Monitoring → waits out the nocturne →
+# Done. Requires a mock-mode APK (MOCK_MODE=1); CI builds one.
+#
+# This is the regression guard for the two bugs that made the transition
+# unusable, so the assertions that matter most are the negative ones:
+#
+#   1. The transition has to be VISIBLE. It used to be dispatched and completed
+#      inside a single poll, so the screen went straight to Done and no render
+#      ever showed it.
+#   2. It has to WAIT. It used to switch immediately on any hiccup in the
+#      playback readings, cutting the nocturne short by minutes.
+#
+# Mock-mode timings (spotifyApi.ts / SetupScreen.tsx): 500ms polls, sleep
+# detected on the 3rd poll (~1.5s), committed track runs 20s, then a poll to
+# switch and another to confirm white noise is playing. Done lands at ~22s.
 appId: com.enysmones.babu
 ---
 - launchApp:
@@ -11,9 +24,22 @@ appId: com.enysmones.babu
     id: "start-routine-button"
 - assertVisible:
     id: "status-text"
+
+# Sleep is detected within a couple of polls and the screen names the nocturne
+# it is waiting out. Matching this proves the transition rendered at all — the
+# first bug. It is asserted on the plain text of the Now Playing card rather
+# than the status pill, whose uppercasing is a style transform and not the
+# underlying text.
 - extendedWaitUntil:
-    visible: "TRANSITIONING"
-    timeout: 10000
+    visible: "white noise after"
+    timeout: 15000
+
+# ...and it is still waiting. Had the switch fired instantly, we would already
+# be on the Done screen.
+- assertNotVisible: "Your baby is asleep"
+
+# The committed track finishes, white noise starts, and the routine confirms it
+# is genuinely playing before reporting done.
 - extendedWaitUntil:
     visible: "Your baby is asleep"
-    timeout: 10000
+    timeout: 45000

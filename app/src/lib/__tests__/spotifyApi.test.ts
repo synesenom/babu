@@ -9,7 +9,9 @@ import {
   play,
   findDeviceByName,
   refreshAccessToken,
+  resetMockPlayback,
 } from '../spotifyApi';
+import { MOCK_TOKEN, CHOPIN_PLAYLIST, WHITENOISE_PLAYLIST } from '../constants';
 
 const TOKEN = 'test-access-token';
 
@@ -301,5 +303,138 @@ describe('refreshAccessToken()', () => {
     const err = await refreshAccessToken('client-id', 'bad-refresh-token').catch((e) => e);
     expect(err).toBeInstanceOf(SpotifyError);
     expect(err.status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fields the transition needs in order to be verifiable rather than hopeful:
+// which track is playing (identity, not display name) and which playlist it
+// came from.
+// ---------------------------------------------------------------------------
+
+describe('getCurrentPlayback() — transition-critical fields', () => {
+  function playbackBody(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      is_playing: true,
+      progress_ms: 60000,
+      context: { uri: 'spotify:playlist:5MKaz5wxcypYQLklyx34J2' },
+      item: {
+        id: '4Oun2ylbjFKMPTiaSbbCih',
+        name: 'Nocturne Op. 9 No. 2',
+        duration_ms: 270000,
+        artists: [{ name: 'Chopin' }],
+        album: { name: 'Nocturnes' },
+      },
+      device: { name: 'iPhone', id: 'dev1' },
+      ...overrides,
+    });
+  }
+
+  it('exposes the track id, so a repeat of the same track is not mistaken for the same play', async () => {
+    fetchMock.mockResponseOnce(playbackBody(), { status: 200 });
+
+    const playback = await getCurrentPlayback(TOKEN);
+
+    expect(playback!.track_id).toBe('4Oun2ylbjFKMPTiaSbbCih');
+  });
+
+  it('exposes the playing context uri, so the white-noise switch can be verified', async () => {
+    fetchMock.mockResponseOnce(playbackBody(), { status: 200 });
+
+    const playback = await getCurrentPlayback(TOKEN);
+
+    expect(playback!.context_uri).toBe('spotify:playlist:5MKaz5wxcypYQLklyx34J2');
+  });
+
+  it('reports a null context uri when playback has no context (single track, radio)', async () => {
+    fetchMock.mockResponseOnce(playbackBody({ context: null }), { status: 200 });
+
+    const playback = await getCurrentPlayback(TOKEN);
+
+    expect(playback!.context_uri).toBeNull();
+  });
+
+  it('falls back to an empty track id rather than throwing when Spotify omits it', async () => {
+    fetchMock.mockResponseOnce(
+      playbackBody({
+        item: { name: 'Local file', duration_ms: 1000, artists: [], album: { name: '' } },
+      }),
+      { status: 200 },
+    );
+
+    const playback = await getCurrentPlayback(TOKEN);
+
+    expect(playback!.track_id).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 202 Accepted means Spotify took the request but the target device was not
+// ready — it wakes the device and the play may or may not follow. Reporting it
+// as success is how a switch gets reported "done" with nothing audible.
+// ---------------------------------------------------------------------------
+
+describe('startPlaylist() — what counts as started', () => {
+  it('reports started on 204 No Content', async () => {
+    fetchMock.mockResponseOnce('', { status: 204 });
+    await expect(startPlaylist(TOKEN, 'spotify:playlist:wn', 'dev1')).resolves.toBe(true);
+  });
+
+  it('reports started on 200 OK', async () => {
+    fetchMock.mockResponseOnce('', { status: 200 });
+    await expect(startPlaylist(TOKEN, 'spotify:playlist:wn', 'dev1')).resolves.toBe(true);
+  });
+
+  it('does NOT report started on 202 Accepted (device asleep, nothing playing yet)', async () => {
+    fetchMock.mockResponseOnce('', { status: 202 });
+    await expect(startPlaylist(TOKEN, 'spotify:playlist:wn', 'dev1')).resolves.toBe(false);
+  });
+
+  it('does not report started on 404 (device gone)', async () => {
+    fetchMock.mockResponseOnce('', { status: 404 });
+    await expect(startPlaylist(TOKEN, 'spotify:playlist:wn', 'dev1')).resolves.toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mock mode has to model playback, not just return nothing. A hardcoded null
+// playback means the routine can never see a track to wait out and can never
+// confirm white noise started, so the whole transition is unexercisable — which
+// is how the mock build came to show a transition that never happened.
+// ---------------------------------------------------------------------------
+
+describe('mock mode', () => {
+  beforeEach(() => {
+    resetMockPlayback();
+  });
+
+  it('reports Chopin playing to begin with', async () => {
+    const playback = await getCurrentPlayback(MOCK_TOKEN);
+
+    expect(playback).not.toBeNull();
+    expect(playback!.is_playing).toBe(true);
+    expect(playback!.context_uri).toBe(CHOPIN_PLAYLIST);
+  });
+
+  it('reports a track that actually finishes, so a transition can complete', async () => {
+    const playback = await getCurrentPlayback(MOCK_TOKEN);
+
+    expect(playback!.remaining_ms).toBeGreaterThan(0);
+    expect(playback!.remaining_ms).toBeLessThanOrEqual(30_000);
+  });
+
+  it('reports white noise once the white-noise playlist has been started', async () => {
+    await startPlaylist(MOCK_TOKEN, WHITENOISE_PLAYLIST, 'mock-device-id');
+
+    const playback = await getCurrentPlayback(MOCK_TOKEN);
+
+    expect(playback!.context_uri).toBe(WHITENOISE_PLAYLIST);
+  });
+
+  it('makes no network calls', async () => {
+    await getCurrentPlayback(MOCK_TOKEN);
+    await startPlaylist(MOCK_TOKEN, WHITENOISE_PLAYLIST, 'mock-device-id');
+
+    expect(fetchMock.mock.calls).toHaveLength(0);
   });
 });

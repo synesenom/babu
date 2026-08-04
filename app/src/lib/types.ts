@@ -27,6 +27,13 @@ export interface SpotifyDevice {
 
 export interface SpotifyPlayback {
   is_playing: boolean;
+  // Spotify's track identity. The display name cannot stand in for it: a
+  // repeating playlist plays tracks with the same name again and again.
+  track_id: string;
+  // The playlist (or album/artist) the current track is being played from, or
+  // null when there is no context. This is what makes "white noise is actually
+  // playing now" a checkable fact rather than an assumption.
+  context_uri: string | null;
   track_name: string;
   artist_name: string;
   album_name: string;
@@ -50,5 +57,11 @@ export interface RoutineState {
   status: RoutineStatus;
   lastReading: OwletReading | null;
   nowPlaying: SpotifyPlayback | null;
+  /**
+   * The nocturne the routine committed to waiting out when sleep was detected,
+   * or null when it is not waiting for one. Shown on the monitoring screen so
+   * the wait is legible: the parent can see which piece has to finish.
+   */
+  waitingFor: string | null;
   error: string | null;
 }

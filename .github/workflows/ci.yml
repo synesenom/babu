@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+    # `labeled` is here so the `e2e` label below takes effect immediately.
+    # Without it, adding a label does not re-trigger the workflow and the label
+    # would only be honoured on the PR's next push.
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -47,3 +52,124 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add README.md
           git diff --staged --quiet || (git commit -m "Update coverage badge [skip ci]" && git push)
+
+  # Maestro flows against a real Android emulator. The Jest suite — including
+  # the routine's integration test — exercises the transition through the real
+  # Spotify client, but only this job proves the whole thing works as a shipped
+  # app: the navigation, the screen, and the polling loop running under Android.
+  #
+  # It builds a MOCK_MODE=1 APK, so it does NOT cover anything that depends on
+  # what the real Spotify API returns.
+  #
+  # Deliberately off the pull-request path. The native build alone is ~15
+  # minutes — RN's New Architecture means codegen and NDK compilation, and none
+  # of it is this app's own code — and the emulator adds several more. Paying
+  # that on every push to every branch would turn a 1-minute PR loop into a
+  # 20-minute one, to re-prove something the Jest suite already covers at the
+  # unit and integration level.
+  #
+  # So it runs where the cost buys the most: on main, before anything reaches a
+  # release build. To get it on a PR that warrants it — anything touching the
+  # routine, the transition, or navigation — add the `e2e` label to that PR and
+  # it will run on the spot.
+  e2e:
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'e2e')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          # No `cache: gradle`: it hashes the project's Gradle files to build
+          # its key, and android/ does not exist yet — `expo prebuild` generates
+          # it further down. The explicit cache step below keys off the
+          # prebuild's *inputs* instead, which do exist at this point.
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle dependencies and build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          # Same key as build-apk.yml on purpose: the two jobs build different
+          # variants of the same project, so whichever runs first warms the
+          # dependency cache for the other.
+          key: gradle-${{ runner.os }}-${{ hashFiles('app/package-lock.json', 'app/app.json', 'app/app.config.js') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Enable the Gradle build cache
+        run: |
+          mkdir -p ~/.gradle
+          echo 'org.gradle.caching=true' >> ~/.gradle/gradle.properties
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Write .env
+        # MOCK_MODE stubs the Spotify OAuth flow entirely, so no secrets are
+        # needed and a fork's pull request can run this job too.
+        run: |
+          cat > .env <<EOF
+          MOCK_MODE=1
+          EOF
+
+      - name: Prebuild native Android project
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --no-daemon
+        working-directory: app/android
+
+      - name: Install Maestro
+        run: |
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Enable KVM
+        # The emulator runs unusably slowly without hardware acceleration, and
+        # the runner does not grant access to /dev/kvm by default.
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run Maestro flows
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          target: google_apis
+          arch: x86_64
+          profile: pixel_5
+          disable-animations: true
+          working-directory: app
+          script: |
+            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+            maestro test e2e/ --format junit --output maestro-report.xml
+
+      - name: Upload Maestro report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-report
+          path: |
+            app/maestro-report.xml
+            app/.maestro/tests/**
+          if-no-files-found: ignore

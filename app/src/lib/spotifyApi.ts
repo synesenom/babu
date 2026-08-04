@@ -1,7 +1,37 @@
 import type { SpotifyAccessToken, SpotifyDevice, SpotifyDeviceId, SpotifyPlayback, SpotifyTokens } from './types';
-import { MOCK_TOKEN } from './constants';
+import { MOCK_TOKEN, CHOPIN_PLAYLIST } from './constants';
 
 const SPOTIFY_API = 'https://api.spotify.com/v1';
+
+// Mock mode models playback rather than reporting nothing. The routine now
+// decides everything from what Spotify says is playing — which track, from which
+// playlist — so a mock that always answers "nothing" leaves the transition
+// impossible to reach and impossible to finish.
+const MOCK_TRACK_MS = 20_000;
+let mockContextUri: string = CHOPIN_PLAYLIST;
+
+/** Puts mock playback back to Chopin. For tests and for a fresh routine. */
+export function resetMockPlayback(): void {
+  mockContextUri = CHOPIN_PLAYLIST;
+}
+
+function mockPlayback(): SpotifyPlayback {
+  const isChopin = mockContextUri === CHOPIN_PLAYLIST;
+  return {
+    is_playing: true,
+    track_id: isChopin ? 'mock-chopin' : 'mock-whitenoise',
+    context_uri: mockContextUri,
+    track_name: isChopin ? 'Nocturne Op. 9 No. 2' : 'Rain on a tent',
+    artist_name: isChopin ? 'Chopin' : 'Sleep Sounds',
+    album_name: isChopin ? 'Nocturnes' : 'Sleep',
+    progress_ms: 0,
+    duration_ms: MOCK_TRACK_MS,
+    remaining_ms: MOCK_TRACK_MS,
+    remaining_seconds: MOCK_TRACK_MS / 1000,
+    device_name: 'Mock device',
+    device_id: 'mock-device-id',
+  };
+}
 
 export class SpotifyError extends Error {
   constructor(public status: number, message: string) {
@@ -46,6 +76,8 @@ function toPlayback(playback: Record<string, unknown>): SpotifyPlayback {
 
   return {
     is_playing: (playback.is_playing as boolean) ?? false,
+    track_id: (track.id as string) ?? '',
+    context_uri: (playback.context as { uri?: string } | null)?.uri ?? null,
     track_name: (track.name as string) ?? 'Unknown',
     artist_name: ((track.artists ?? []) as Array<{ name: string }>).map((a) => a.name).join(', '),
     album_name: (track.album as { name?: string })?.name ?? 'Unknown',
@@ -59,7 +91,7 @@ function toPlayback(playback: Record<string, unknown>): SpotifyPlayback {
 }
 
 export async function getCurrentPlayback(token: SpotifyAccessToken): Promise<SpotifyPlayback | null> {
-  if (token === MOCK_TOKEN) return null;
+  if (token === MOCK_TOKEN) return mockPlayback();
   const res = await spotifyFetch(`${SPOTIFY_API}/me/player`, token);
   if (res.status === 204) return null;
   if (!res.ok) {
@@ -76,18 +108,25 @@ export async function getRemainingSeconds(token: SpotifyAccessToken): Promise<nu
   return playback ? playback.remaining_seconds : null;
 }
 
-function isOkOrNoContent(res: Response): boolean {
-  return res.ok || res.status === 204;
+// Whether Spotify actually applied the command, as opposed to merely accepting
+// it. 202 means the target device was not ready: Spotify has gone off to wake
+// it and the playback may or may not follow. Counting that as success is how a
+// switch gets reported as done with nothing audible in the room.
+function wasApplied(res: Response): boolean {
+  return res.ok && res.status !== 202;
 }
 
 export async function startPlaylist(token: SpotifyAccessToken, playlistUri: string, deviceId: SpotifyDeviceId): Promise<boolean> {
-  if (token === MOCK_TOKEN) return true;
+  if (token === MOCK_TOKEN) {
+    mockContextUri = playlistUri;
+    return true;
+  }
   const url = `${SPOTIFY_API}/me/player/play?device_id=${encodeURIComponent(deviceId)}`;
   const res = await spotifyFetch(url, token, {
     method: 'PUT',
     body: JSON.stringify({ context_uri: playlistUri }),
   });
-  return isOkOrNoContent(res);
+  return wasApplied(res);
 }
 
 async function setPlaybackState(action: 'play' | 'pause', token: SpotifyAccessToken, deviceId?: SpotifyDeviceId): Promise<boolean> {
@@ -96,7 +135,7 @@ async function setPlaybackState(action: 'play' | 'pause', token: SpotifyAccessTo
     ? `${SPOTIFY_API}/me/player/${action}?device_id=${encodeURIComponent(deviceId)}`
     : `${SPOTIFY_API}/me/player/${action}`;
   const res = await spotifyFetch(url, token, { method: 'PUT' });
-  return isOkOrNoContent(res);
+  return wasApplied(res);
 }
 
 export function pause(token: SpotifyAccessToken, deviceId?: SpotifyDeviceId): Promise<boolean> {

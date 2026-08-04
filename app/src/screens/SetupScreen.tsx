@@ -22,6 +22,7 @@ import VersionLabel from '../components/VersionLabel';
 import ErrorBanner from '../components/ErrorBanner';
 import type { OwletReading, OwletRegion, SpotifyTokens } from '../lib/types';
 import { MOCK_TOKEN } from '../lib/constants';
+import { resetMockPlayback } from '../lib/spotifyApi';
 import { CLIENT_ID, MOCK_MODE } from '../lib/config';
 import { colors, sharedStyles } from '../lib/theme';
 
@@ -107,6 +108,8 @@ export default function SetupScreen({ navigation }: Props) {
     setInitialising(true);
     try {
       if (MOCK_MODE) {
+        // Each run starts from Chopin, so the transition can be exercised again.
+        resetMockPlayback();
         let tickCount = 0;
         const mockOwlet = {
           read: async (): Promise<OwletReading> => {
