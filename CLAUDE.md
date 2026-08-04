@@ -235,7 +235,13 @@ Edit `app/src/lib/constants.ts` (single source of truth — no duplicates anywhe
 Tokens live in `expo-secure-store` under the keys used in `spotifyAuth.ts`. In mock mode (`MOCK_MODE=1`) the OAuth flow is skipped entirely.
 
 ### CI
-`.github/workflows/ci.yml` runs `npm run test:coverage` in `app/` on every push/PR and rewrites the coverage badge in `README.md` on pushes to `main` (commits with `[skip ci]`). Keep the badge URL format `https://img.shields.io/badge/coverage-...` intact — the workflow updates it with `sed`.
+`.github/workflows/ci.yml` has two jobs.
+
+**`test`** runs `npm run test:coverage` in `app/` on every push/PR and rewrites the coverage badge in `README.md` on pushes to `main` (commits with `[skip ci]`). Keep the badge URL format `https://img.shields.io/badge/coverage-...` intact — the workflow updates it with `sed`.
+
+**`e2e`** builds a `MOCK_MODE=1` APK, boots an Android emulator and runs the Maestro flows in `app/e2e/`. It does **not** run on pull requests by default: the native build alone is ~15 minutes (RN's New Architecture means codegen and NDK compilation — almost none of it this app's own code), and the emulator adds several more, which would turn a 1-minute PR loop into a 20-minute one. It runs on `main`, on `workflow_dispatch`, and on any PR labelled **`e2e`** — add that label to anything touching the routine, the transition, or navigation.
+
+Both native builds cache `~/.gradle/caches` and `~/.gradle/wrapper` under a shared key. The key is derived from `package-lock.json` + `app.json` + `app.config.js` rather than from Gradle files, because `android/` does not exist until `expo prebuild` generates it — which is also why `setup-java`'s `cache: gradle` cannot be used here. `org.gradle.caching` is set in `GRADLE_USER_HOME`, not the project, since prebuild regenerates the project's `gradle.properties` every run.
 
 ---
 

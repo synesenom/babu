@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+    # `labeled` is here so the `e2e` label below takes effect immediately.
+    # Without it, adding a label does not re-trigger the workflow and the label
+    # would only be honoured on the PR's next push.
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -55,7 +60,22 @@ jobs:
   #
   # It builds a MOCK_MODE=1 APK, so it does NOT cover anything that depends on
   # what the real Spotify API returns.
+  #
+  # Deliberately off the pull-request path. The native build alone is ~15
+  # minutes — RN's New Architecture means codegen and NDK compilation, and none
+  # of it is this app's own code — and the emulator adds several more. Paying
+  # that on every push to every branch would turn a 1-minute PR loop into a
+  # 20-minute one, to re-prove something the Jest suite already covers at the
+  # unit and integration level.
+  #
+  # So it runs where the cost buys the most: on main, before anything reaches a
+  # release build. To get it on a PR that warrants it — anything touching the
+  # routine, the transition, or navigation — add the `e2e` label to that PR and
+  # it will run on the spot.
   e2e:
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'e2e')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
