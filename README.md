@@ -9,6 +9,15 @@ Built with React Native ([Expo](https://expo.dev)) and TypeScript.
 
 ---
 
+## Screenshots
+
+| Setup | Transitioning | Asleep |
+|---|---|---|
+| ![Setup screen](docs/screenshots/setup-screen.jpg) | ![Transitioning screen](docs/screenshots/transitioning-screen.jpg) | ![Done screen](docs/screenshots/done-screen.jpg) |
+| Owlet + Spotify credentials and device setup | Live vitals while the current nocturne finishes | White noise playing once the baby is asleep |
+
+---
+
 ## How it works
 
 1. Enter your Owlet credentials in the app, connect Spotify via OAuth, and enter the name of the Spotify device to control.
